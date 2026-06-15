@@ -1,9 +1,18 @@
 variable "name" { type = string }
 variable "vantage" { type = string }
 variable "instance_type" { type = string }
-variable "image_ref" { type = string }
 variable "ssh_public_key" { type = string }
 variable "admin_cidr" { type = string }
+
+variable "repo_url" { type = string }
+variable "git_ref" {
+  type    = string
+  default = "main"
+}
+variable "go_arch" {
+  type    = string
+  default = "arm64" # t4g instances
+}
 
 variable "run_website" {
   type    = bool

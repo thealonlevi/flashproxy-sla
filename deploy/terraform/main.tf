@@ -9,7 +9,8 @@ module "ashburn" {
   name           = "flashproxy-status-ashburn"
   vantage        = "aws-ashburn"
   instance_type  = var.instance_type
-  image_ref      = var.image_ref
+  repo_url       = var.repo_url
+  git_ref        = var.git_ref
   ssh_public_key = var.ssh_public_key
   admin_cidr     = var.admin_cidr
 
@@ -30,7 +31,8 @@ module "frankfurt" {
   name           = "flashproxy-status-frankfurt"
   vantage        = "aws-frankfurt"
   instance_type  = var.instance_type
-  image_ref      = var.image_ref
+  repo_url       = var.repo_url
+  git_ref        = var.git_ref
   ssh_public_key = var.ssh_public_key
   admin_cidr     = var.admin_cidr
 

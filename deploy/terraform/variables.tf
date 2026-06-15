@@ -14,10 +14,16 @@ variable "instance_type" {
   default     = "t4g.small"
 }
 
-variable "image_ref" {
-  description = "Container image with the worker/website/origin binaries (build & push from the repo Dockerfile)"
+variable "repo_url" {
+  description = "Public git repo the instances build from (stdlib-only, no module downloads)"
   type        = string
-  default     = "ghcr.io/flashproxy/flashproxy-status:latest"
+  default     = "https://github.com/thealonlevi/flashproxy-sla.git"
+}
+
+variable "git_ref" {
+  description = "Branch/tag/sha to build"
+  type        = string
+  default     = "main"
 }
 
 # ClickHouse endpoint (the bare-metal CH behind Cloudflare) + per-role creds.

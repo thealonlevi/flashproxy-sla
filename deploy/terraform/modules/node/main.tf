@@ -4,6 +4,18 @@ terraform {
   }
 }
 
+locals {
+  ipv6_pkgs = toset(["ipv6", "ipv6-datacenter"])
+  targets = [for pkg, u in var.proxy_urls : {
+    package        = pkg
+    proxy_url      = u
+    connect_target = "www.google.com:443"
+    origin_get     = ""
+    ip_version     = contains(local.ipv6_pkgs, pkg) ? 6 : 4
+    interval_ms    = 10000
+  }]
+}
+
 # Latest Ubuntu 24.04 ARM64 (Canonical)
 data "aws_ami" "ubuntu" {
   most_recent = true
@@ -73,7 +85,9 @@ resource "aws_instance" "this" {
   ipv6_address_count     = 1 # dual-stack so ipv6 packages can egress v6 to the origin
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    image_ref           = var.image_ref
+    repo_url            = var.repo_url
+    git_ref             = var.git_ref
+    go_arch             = var.go_arch
     vantage             = var.vantage
     run_website         = var.run_website
     run_worker          = var.run_worker
@@ -81,7 +95,7 @@ resource "aws_instance" "this" {
     ch_url              = var.ch_url
     ch_worker_password  = var.ch_worker_password
     ch_website_password = var.ch_website_password
-    proxy_urls_json     = jsonencode(var.proxy_urls)
+    targets_json        = jsonencode(local.targets)
   })
 
   tags = { Name = var.name }
