@@ -49,7 +49,7 @@
       <p>Availability is measured by FlashProxy's independent synthetic monitoring, which probes each covered product from <strong>multiple geographic vantage points at 1-minute granularity</strong> (US and EU; each product is measured from its geographically appropriate vantage). The live record and 90-day history are published at <a href="/" class="plain">status.flashproxy.com</a> and serve as the <strong>system of record</strong> for all SLA calculations (see §3 — this system and its data are fully public).</p>
       <ul>
         <li><strong>Available</strong> — the product's gateway is reachable and successfully establishes upstream proxy connections (<code>CONNECT → 200</code>).</li>
-        <li><strong>Degraded</strong> — the product is Available, but for a sustained period (≥ 5 minutes) its measured connect latency exceeds <strong>2× the product's target response time</strong> or its synthetic success rate falls below <strong>95%</strong>. Degraded time counts at <strong>½ weight</strong>.</li>
+        <li><strong>Degraded</strong> — the product is Available, but its <strong>average connect latency from its best (lowest-latency) vantage exceeds 50 ms for 5 consecutive minutes</strong>. It remains Degraded until that average recovers below 50 ms. Degraded time counts at <strong>½ weight</strong>.</li>
         <li><strong>Down</strong> — the product is not Available for reasons within FlashProxy's reasonable control.</li>
         <li><strong>Impact Minutes</strong> = Down minutes + (½ × Degraded minutes), per product, per month.</li>
         <li><strong>Monthly Availability</strong> = (Total minutes − Down-equivalent Impact minutes) ÷ Total minutes × 100.</li>
@@ -92,17 +92,17 @@
       <p>Credit = (applicable %) × (the customer's spend on the affected product during the affected month). Issued automatically as account credit toward future FlashProxy usage at the close of the affected month. Maximum 100% of the affected product's monthly spend; non-cash, non-transferable; expires 12 months after issuance.</p>
 
       <h2>6. Compensation — Time-based "Unlimited" Tiers</h2>
-      <p><em>Applies to the time-based Unlimited tier of any covered product.</em> Because these plans are a fixed time window — every minute of downtime is permanently lost utility — the 100% guarantee is honored from the first qualifying minute, compensated by an automatic <strong>time extension at a multiplier</strong>:</p>
+      <p><em>Applies to the time-based Unlimited tier of any covered product.</em> Because these plans are a fixed time window — every minute of downtime is permanently lost utility — the 100% guarantee is honored from the first qualifying minute, compensated by an automatic <strong>SLA credit calculated from the plan's total cost</strong>. Let <em>impact fraction</em> = Impact Minutes ÷ the plan term:</p>
       <table>
-        <tr><th>Impact in the month (as % of plan term)</th><th>Automatic remedy</th></tr>
-        <tr><td>Any impact, &lt; 0.1% of term</td><td>Term extended by <strong>5×</strong> the impact duration</td></tr>
-        <tr><td>0.1% – 1% of term</td><td>Term extended by <strong>10×</strong> the impact duration</td></tr>
-        <tr><td>&gt; 1% of term (≈ &gt; 7 h on a 30-day plan)</td><td><strong>10×</strong> extension, or a pro-rata cash-equivalent credit for the affected term</td></tr>
+        <tr><th>Impact fraction (of plan term)</th><th>SLA credit</th></tr>
+        <tr><td>Any impact, &lt; 0.1% of term</td><td><strong>5 ×</strong> (impact fraction × total plan cost)</td></tr>
+        <tr><td>0.1% – 1% of term</td><td><strong>10 ×</strong> (impact fraction × total plan cost)</td></tr>
+        <tr><td>&gt; 1% of term (≈ &gt; 7 h on a 30-day plan)</td><td><strong>10 ×</strong> (impact fraction × total plan cost), or a pro-rata refund of the affected term</td></tr>
       </table>
-      <p>Extensions are applied automatically to the active subscription term. <strong>Cap:</strong> total extensions are limited to +100% of the original term per billing cycle (worst case, the term is doubled — never unbounded). Example: a 30-day Shared ISP USA Unlimited plan with a 1-hour outage → +10 hours added automatically.</p>
+      <p>Issued automatically as account credit. <strong>Cap:</strong> total SLA credit is limited to 100% of the plan's total cost per billing cycle. Example: a 30-day Shared ISP USA Unlimited plan with a 1-hour outage → impact fraction ≈ 0.14% → <strong>10× → an SLA credit of ≈ 1.4% of the plan's total cost</strong>, applied automatically.</p>
 
       <h2>7. Automatic Application (No Claims)</h2>
-      <p>FlashProxy's monitoring computes Monthly Availability per covered product and, using per-account usage data, identifies exactly which customers used an affected product during the impact window. The applicable remedy — account credit (per-GB) or term extension (time-based) — is then applied automatically, with an in-dashboard notification. Customers do not need to file anything. Good-faith disputes are reviewed via <a href="mailto:contact@flashproxy.io">contact@flashproxy.io</a> within 30 days of issuance.</p>
+      <p>FlashProxy's monitoring computes Monthly Availability per covered product and, using per-account usage data, identifies exactly which customers used an affected product during the impact window. The applicable <strong>SLA credit</strong> — a percentage of monthly spend (per-GB) or of total plan cost (time-based) — is then applied automatically to the customer's account, with an in-dashboard notification. Customers do not need to file anything. Good-faith disputes are reviewed via <a href="mailto:contact@flashproxy.io">contact@flashproxy.io</a> within 30 days of issuance.</p>
 
       <h2>8. Performance Targets (Service-Level Objectives)</h2>
       <p>The target response times under <strong>Covered Products</strong> are objectives — they define the "Degraded" threshold in §2 but are not, in themselves, credit-bearing (latency and request success also depend on the customer's targets and network). Shared ISP EU is in launch phase (Netherlands live, additional EU countries rolling out) and is measured from FlashProxy's EU vantage.</p>
