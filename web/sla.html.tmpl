@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FlashProxy SLA — 100% Uptime Guarantee, Automatically Compensated</title>
+  <meta name="description" content="FlashProxy's Service Level Agreement: a 100% uptime guarantee with automatic, proportional compensation, independently verifiable via open-source monitoring and a public metrics database. Covers Datacenter, IPv6 Datacenter, Shared ISP USA, IPv6 Residential, and Shared ISP EU." />
+  <link rel="canonical" href="{{.SiteURL}}/sla" />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="theme-color" content="#0d1117" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="FlashProxy Status" />
+  <meta property="og:title" content="FlashProxy SLA — 100% Uptime Guarantee" />
+  <meta property="og:description" content="100% uptime guarantee with automatic compensation, independently verifiable via open-source monitoring and a public metrics database." />
+  <meta property="og:url" content="{{.SiteURL}}/sla" />
+  <meta name="twitter:card" content="summary" />
+  <link rel="stylesheet" href="style.css" />
+  <script type="application/ld+json">{{.JSONLD}}</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="head">
+      <div class="brand"><a href="/" class="plain">flashproxy<span class="slash">/</span>status</a></div>
+      <div class="updated"><a href="/" class="plain">← live status</a></div>
+    </header>
+
+    <article class="sla">
+      <h1>FlashProxy Service Level Agreement</h1>
+      <p class="sla-sub"><strong>100% Uptime Guarantee</strong> · automatic compensation · independently verifiable. Current network status: <a href="/" class="plain">{{.OverallLabel}}</a> · {{.Updated}}.</p>
+      <p class="muted"><em>Version 2.1 · Governed by and incorporated into the <a href="https://flashproxy.com/terms">Terms of Service</a>.</em></p>
+
+      <h2>Covered Products</h2>
+      <p>This SLA applies to the following FlashProxy products, each available in a <strong>per-GB tier</strong> and a <strong>time-based "Unlimited" tier</strong>:</p>
+      <table>
+        <tr><th>Product</th><th>Target response time</th></tr>
+        <tr><td>Datacenter</td><td>30 ms</td></tr>
+        <tr><td>IPv6 Datacenter</td><td>30 ms</td></tr>
+        <tr><td>Shared ISP USA</td><td>39 ms</td></tr>
+        <tr><td>IPv6 Residential</td><td>39 ms</td></tr>
+        <tr><td>Shared ISP EU <span class="muted">(launch phase)</span></td><td>39 ms</td></tr>
+      </table>
+      <p>Other FlashProxy products (Residential, Residential Lite, Mobile, Unlimited Residential, Dedicated ISP) are <strong>not covered</strong> by this SLA.</p>
+
+      <h2>1. The Guarantee</h2>
+      <p>FlashProxy guarantees <strong>100% availability</strong> for each covered product. <strong>Any</strong> qualifying downtime or service degradation results in <strong>automatic, proportional compensation</strong> — no claim or ticket required. There is no monthly downtime allowance: the bar is 100%, and compensation accrues from the first qualifying minute (subject to the plan-type thresholds and exclusions below). This SLA is measured and enforced per product, per calendar month, per affected customer.</p>
+
+      <h2>2. Definitions &amp; Measurement</h2>
+      <p>Availability is measured by FlashProxy's independent synthetic monitoring, which probes each covered product from <strong>multiple geographic vantage points at 1-minute granularity</strong> (US and EU; each product is measured from its geographically appropriate vantage). The live record and 90-day history are published at <a href="/" class="plain">status.flashproxy.com</a> and serve as the <strong>system of record</strong> for all SLA calculations (see §3 — this system and its data are fully public).</p>
+      <ul>
+        <li><strong>Available</strong> — the product's gateway is reachable and successfully establishes upstream proxy connections (<code>CONNECT → 200</code>).</li>
+        <li><strong>Degraded</strong> — the product is Available, but for a sustained period (≥ 5 minutes) its measured connect latency exceeds <strong>2× the product's target response time</strong> or its synthetic success rate falls below <strong>95%</strong>. Degraded time counts at <strong>½ weight</strong>.</li>
+        <li><strong>Down</strong> — the product is not Available for reasons within FlashProxy's reasonable control.</li>
+        <li><strong>Impact Minutes</strong> = Down minutes + (½ × Degraded minutes), per product, per month.</li>
+        <li><strong>Monthly Availability</strong> = (Total minutes − Down-equivalent Impact minutes) ÷ Total minutes × 100.</li>
+      </ul>
+
+      <h2>3. Transparency &amp; Independent Verification</h2>
+      <p>This SLA is <strong>independently auditable</strong>. Both the system that measures it and the raw data behind it are public, so any customer or third party can reproduce and challenge every figure.</p>
+      <ul>
+        <li><strong>Fully open source.</strong> The complete monitoring system behind status.flashproxy.com — the probers, the dashboard, and the deployment — is published at <a href="https://github.com/thealonlevi/flashproxy-sla">github.com/thealonlevi/flashproxy-sla</a>. Anyone can inspect exactly how availability is measured and <strong>run their own identical instance</strong>.</li>
+        <li><strong>Public metrics database.</strong> The ClickHouse database that populates status.flashproxy.com is exposed to the public with <strong>full read access</strong>, so anyone can query the same raw measurements FlashProxy uses to calculate this SLA:
+          <ul>
+            <li>Endpoint: <code>https://ch.flashproxy.com</code></li>
+            <li>User: <code>flashproxy-status-public</code> · Password: <code>flashproxy-public-ro</code> · Database: <code>sla</code></li>
+            <li>Example: <code>curl https://ch.flashproxy.com/ -H 'X-ClickHouse-User: flashproxy-status-public' -H 'X-ClickHouse-Key: flashproxy-public-ro' -d 'SELECT * FROM sla.probe_raw LIMIT 10'</code></li>
+          </ul>
+        </li>
+      </ul>
+      <p>Because both the measurement code and the underlying data are public, every availability figure and every compensation determination under this SLA can be <strong>independently reproduced and verified</strong>.</p>
+
+      <h2>4. Exclusions</h2>
+      <p>The following never count as Down or Degraded time:</p>
+      <ol>
+        <li><strong>Customer-caused</strong> — invalid credentials; exceeding the plan's concurrency, bandwidth, throughput, or data-cap limits; IP-allowlist misconfiguration; or the customer's own network/client issues.</li>
+        <li><strong>Target-caused</strong> — the customer's destination is down, blocking, rate-limiting, challenging, or returning errors. <em>FlashProxy guarantees the availability of the proxy, not the outcome of the customer's request against any third party.</em></li>
+        <li><strong>Scheduled maintenance</strong> announced at least 24 hours in advance (capped at 4 hours per month).</li>
+        <li><strong>Account status</strong> — trial/free accounts, KYC-declined accounts, accounts suspended under the Acceptable Use Policy, and accounts not in good standing (unpaid or overdue).</li>
+        <li><strong>Force majeure</strong> and events outside FlashProxy's network — upstream backbone/transit outages, and denial-of-service attacks beyond commercially reasonable mitigation.</li>
+      </ol>
+
+      <h2>5. Compensation — Per-GB Tiers</h2>
+      <p><em>Applies to the per-GB tier of any covered product.</em> Compensation is an automatic <strong>account credit</strong>, scaled to the month's availability. The lowest threshold the month crosses applies:</p>
+      <table>
+        <tr><th>Monthly availability</th><th>Automatic credit</th></tr>
+        <tr><td>≥ 99.9%</td><td>None — within tolerance</td></tr>
+        <tr><td>&lt; 99.9%</td><td><strong>10%</strong></td></tr>
+        <tr><td>&lt; 99.0%</td><td><strong>25%</strong></td></tr>
+        <tr><td>&lt; 95.0%</td><td><strong>50%</strong></td></tr>
+        <tr><td>&lt; 90.0%</td><td><strong>100%</strong></td></tr>
+      </table>
+      <p>Credit = (applicable %) × (the customer's spend on the affected product during the affected month). Issued automatically as account credit toward future FlashProxy usage at the close of the affected month. Maximum 100% of the affected product's monthly spend; non-cash, non-transferable; expires 12 months after issuance.</p>
+
+      <h2>6. Compensation — Time-based "Unlimited" Tiers</h2>
+      <p><em>Applies to the time-based Unlimited tier of any covered product.</em> Because these plans are a fixed time window — every minute of downtime is permanently lost utility — the 100% guarantee is honored from the first qualifying minute, compensated by an automatic <strong>time extension at a multiplier</strong>:</p>
+      <table>
+        <tr><th>Impact in the month (as % of plan term)</th><th>Automatic remedy</th></tr>
+        <tr><td>Any impact, &lt; 0.1% of term</td><td>Term extended by <strong>5×</strong> the impact duration</td></tr>
+        <tr><td>0.1% – 1% of term</td><td>Term extended by <strong>10×</strong> the impact duration</td></tr>
+        <tr><td>&gt; 1% of term (≈ &gt; 7 h on a 30-day plan)</td><td><strong>10×</strong> extension, or a pro-rata cash-equivalent credit for the affected term</td></tr>
+      </table>
+      <p>Extensions are applied automatically to the active subscription term. <strong>Cap:</strong> total extensions are limited to +100% of the original term per billing cycle (worst case, the term is doubled — never unbounded). Example: a 30-day Shared ISP USA Unlimited plan with a 1-hour outage → +10 hours added automatically.</p>
+
+      <h2>7. Automatic Application (No Claims)</h2>
+      <p>FlashProxy's monitoring computes Monthly Availability per covered product and, using per-account usage data, identifies exactly which customers used an affected product during the impact window. The applicable remedy — account credit (per-GB) or term extension (time-based) — is then applied automatically, with an in-dashboard notification. Customers do not need to file anything. Good-faith disputes are reviewed via <a href="mailto:contact@flashproxy.io">contact@flashproxy.io</a> within 30 days of issuance.</p>
+
+      <h2>8. Performance Targets (Service-Level Objectives)</h2>
+      <p>The target response times under <strong>Covered Products</strong> are objectives — they define the "Degraded" threshold in §2 but are not, in themselves, credit-bearing (latency and request success also depend on the customer's targets and network). Shared ISP EU is in launch phase (Netherlands live, additional EU countries rolling out) and is measured from FlashProxy's EU vantage.</p>
+
+      <h2>9. General Terms</h2>
+      <p>This SLA is the customer's sole and exclusive remedy for availability and performance shortfalls. Total compensation in any month will not exceed the limits stated in §5 and §6. FlashProxy may revise this SLA with at least 30 days' notice; the current version is always published at <a href="/sla" class="plain">status.flashproxy.com/sla</a>. Capitalized terms not defined here have the meaning given in the Terms of Service.</p>
+    </article>
+
+    <footer class="foot">
+      <a href="/" class="plain">← live status</a> · open source &amp; independently verifiable ·
+      <a href="https://github.com/thealonlevi/flashproxy-sla">source</a>
+    </footer>
+  </div>
+</body>
+</html>

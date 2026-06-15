@@ -55,10 +55,11 @@ type Config struct {
 var pkgRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
 type server struct {
-	cfg    Config
-	ch     *chstore.Client
-	tmpl   *template.Template
-	static http.Handler
+	cfg     Config
+	ch      *chstore.Client
+	tmpl    *template.Template
+	slaTmpl *template.Template
+	static  http.Handler
 }
 
 func main() {
@@ -67,10 +68,11 @@ func main() {
 
 	cfg := loadConfig(*cfgPath)
 	s := &server{
-		cfg:    cfg,
-		ch:     chstore.New(cfg.ClickHouse.URL, cfg.ClickHouse.DB, cfg.ClickHouse.User, cfg.ClickHouse.Password),
-		tmpl:   template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "index.html.tmpl"))),
-		static: http.FileServer(http.Dir(cfg.WebDir)),
+		cfg:     cfg,
+		ch:      chstore.New(cfg.ClickHouse.URL, cfg.ClickHouse.DB, cfg.ClickHouse.User, cfg.ClickHouse.Password),
+		tmpl:    template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "index.html.tmpl"))),
+		slaTmpl: template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "sla.html.tmpl"))),
+		static:  http.FileServer(http.Dir(cfg.WebDir)),
 	}
 
 	mux := http.NewServeMux()
@@ -84,6 +86,7 @@ func main() {
 	mux.HandleFunc("/robots.txt", s.handleRobots)
 	mux.HandleFunc("/sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("/llms.txt", s.handleLLMs)
+	mux.HandleFunc("/sla", s.handleSLA)
 	mux.HandleFunc("/", s.handleRoot) // SSR for "/", static for everything else
 
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
@@ -422,6 +425,17 @@ var statusLabel = map[string]string{
 	"down": "Down", "no_data": "No data",
 }
 
+// slaJSONLD is structured data for the /sla page (Organization + WebPage + FAQ).
+const slaJSONLD = `[
+{"@context":"https://schema.org","@type":"Organization","name":"FlashProxy","url":"https://flashproxy.com"},
+{"@context":"https://schema.org","@type":"WebPage","name":"FlashProxy Service Level Agreement","url":"https://status.flashproxy.com/sla","description":"FlashProxy's 100% uptime guarantee with automatic, proportional compensation, independently verifiable via open-source monitoring and a public metrics database."},
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Does FlashProxy offer an uptime SLA?","acceptedAnswer":{"@type":"Answer","text":"Yes. FlashProxy guarantees 100% availability on Datacenter, IPv6 Datacenter, Shared ISP USA, IPv6 Residential, and Shared ISP EU, with automatic, proportional compensation for any qualifying downtime or degradation."}},
+{"@type":"Question","name":"How does FlashProxy compensate for downtime?","acceptedAnswer":{"@type":"Answer","text":"Per-GB plans receive automatic account credits scaled to monthly availability (10% below 99.9%, up to 100% below 90%). Time-based Unlimited plans receive automatic time extensions of 5x to 10x the downtime, capped at one extra term."}},
+{"@type":"Question","name":"Is FlashProxy's SLA independently verifiable?","acceptedAnswer":{"@type":"Answer","text":"Yes. The monitoring system is fully open source at github.com/thealonlevi/flashproxy-sla, and the ClickHouse metrics database that powers status.flashproxy.com is publicly readable, so anyone can reproduce every availability figure."}}
+]}
+]`
+
 // buildIndex computes a current snapshot (best vantage per product) for SSR.
 func (s *server) buildIndex(r *http.Request) idxData {
 	d := idxData{SiteURL: s.cfg.SiteURL, OverallStatus: "no_data", OverallLabel: "Awaiting Data", Updated: "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"), JSONLD: template.JS(jsonLD)}
@@ -478,6 +492,16 @@ func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func (s *server) handleSLA(w http.ResponseWriter, r *http.Request) {
+	d := s.buildIndex(r)
+	d.JSONLD = template.JS(slaJSONLD)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=300")
+	if err := s.slaTmpl.Execute(w, d); err != nil {
+		log.Printf("render sla: %v", err)
+	}
+}
+
 func (s *server) handleRobots(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	fmt.Fprintf(w, `User-agent: *
@@ -505,11 +529,13 @@ Sitemap: %s/sitemap.xml
 
 func (s *server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	today := time.Now().UTC().Format("2006-01-02")
 	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>%s/</loc><lastmod>%s</lastmod><changefreq>hourly</changefreq><priority>1.0</priority></url>
+  <url><loc>%s/sla</loc><lastmod>%s</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
 </urlset>
-`, s.cfg.SiteURL, time.Now().UTC().Format("2006-01-02"))
+`, s.cfg.SiteURL, today, s.cfg.SiteURL, today)
 }
 
 func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {
@@ -523,7 +549,8 @@ func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "- %s: %s, ~%dms median connect (best vantage: %s)\n", p.Name, p.StatusLabel, p.Median, p.Vantage)
 	}
 	fmt.Fprintf(w, "\n## What is measured\n\nPer product, per vantage: average and median connect latency (the time the proxy takes to establish the upstream connection), gateway ping RTT, throughput (streaming and large-object), high-frequency small-payload setup, broad scraping reachability, long-session stability, and a direct (no-proxy) baseline for comparison.\n\n")
-	fmt.Fprintf(w, "## Source\n\nThis status page is open source and fully reproducible: %s\n", "https://github.com/thealonlevi/flashproxy-sla")
+	fmt.Fprintf(w, "## SLA\n\nFlashProxy backs these products with a 100%% uptime guarantee and automatic, proportional compensation. Full terms: %s/sla\n\n", s.cfg.SiteURL)
+	fmt.Fprintf(w, "## Source\n\nThis status page is open source and fully reproducible: %s — and the metrics database is publicly readable.\n", "https://github.com/thealonlevi/flashproxy-sla")
 }
 
 func noCache(h http.Handler) http.Handler {

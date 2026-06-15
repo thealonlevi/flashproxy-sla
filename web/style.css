@@ -172,3 +172,20 @@ html, body {
 .about h2, .faq h2 { font-size: 15px; margin: 14px 0 6px; color: var(--ink); }
 .faq h3 { font-size: 13px; margin: 14px 0 2px; color: var(--ink); }
 .about code { background: #f0f1ee; padding: 0 3px; border-radius: 2px; }
+
+/* SLA page + cross-links */
+a.plain { color: inherit; text-decoration: none; }
+a.plain:hover { text-decoration: underline; }
+.sla-cta { font-size: 13px; }
+.sla-cta a, .sla a { color: #2f7d3a; }
+.sla { max-width: 80ch; }
+.sla h1 { font-size: 22px; margin: 16px 0 4px; }
+.sla h2 { font-size: 16px; margin: 26px 0 6px; border-top: 1px solid var(--line); padding-top: 14px; }
+.sla .sla-sub { font-size: 14px; color: var(--ink); }
+.sla p, .sla li { font-size: 13px; line-height: 1.65; color: var(--ink); }
+.sla ul, .sla ol { padding-left: 20px; }
+.sla li { margin: 4px 0; }
+.sla table { border-collapse: collapse; margin: 8px 0 4px; width: 100%; font-size: 13px; }
+.sla th, .sla td { border: 1px solid var(--line); padding: 5px 9px; text-align: left; }
+.sla th { background: #f4f6f3; font-weight: 600; }
+.sla code { background: #f0f1ee; padding: 0 3px; border-radius: 2px; font-size: 12px; word-break: break-all; }
