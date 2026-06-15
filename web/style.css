@@ -159,3 +159,7 @@ html, body {
 .scn-name { font-size: 11px; color: var(--muted); text-transform: lowercase; }
 .scn-kpi { font-size: 14px; font-weight: 600; margin: 2px 0; }
 .scn-n { font-size: 10px; color: var(--muted); }
+
+/* proxy-vs-direct rows in scenario cards */
+.scn-direct { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.scn-delta { font-size: 11px; color: var(--ink); font-weight: 600; margin-top: 1px; }

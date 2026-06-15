@@ -162,12 +162,15 @@ func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
 	}
 
 	s := cfg.Scenarios
-	// connect (the SLA headline) + scraping always run.
+	// Each scenario runs twice per cycle: through the proxy, and direct (nil proxy)
+	// as the no-proxy baseline ("_direct"), so the page can show proxy overhead.
 	go loop(defInt(t.IntervalMS, 20000), func() {
 		emit(probe.ConnectScenario(proxy, t.ConnectTarget, t.OriginGet, timeout))
+		emit(probe.ConnectScenario(nil, t.ConnectTarget, t.OriginGet, timeout))
 	})
 	go loop(s.ScrapingIntervalMS, func() {
 		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)
+		emit(probe.Scraping(nil, cfg.ScrapeHosts, timeout)...)
 	})
 	// ICMP ping to the gateway host — raw network RTT, runs alongside everything.
 	go loop(s.PingIntervalMS, func() {
@@ -182,15 +185,19 @@ func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
 	if origin != "" {
 		go loop(s.StreamingIntervalMS, func() {
 			emit(probe.Streaming(proxy, origin, s.StreamingBytes, streamTimeout))
+			emit(probe.Streaming(nil, origin, s.StreamingBytes, streamTimeout))
 		})
 		go loop(s.LargeObjectIntervalMS, func() {
 			emit(probe.LargeObject(proxy, origin, s.LargeObjectBytes, timeout))
+			emit(probe.LargeObject(nil, origin, s.LargeObjectBytes, timeout))
 		})
 		go loop(s.HifreqIntervalMS, func() {
 			emit(probe.HifreqSmall(proxy, origin, s.HifreqCount, timeout)...)
+			emit(probe.HifreqSmall(nil, origin, s.HifreqCount, timeout)...)
 		})
 		go loop(s.LongSessionIntervalMS, func() {
 			emit(probe.LongSession(proxy, origin, s.LongSessionHoldMS, timeout))
+			emit(probe.LongSession(nil, origin, s.LongSessionHoldMS, timeout))
 		})
 	}
 }

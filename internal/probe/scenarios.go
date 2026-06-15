@@ -15,10 +15,28 @@ import (
 	"github.com/flashproxy/flashproxy-status/internal/model"
 )
 
-// openTunnel opens an HTTP CONNECT tunnel through the proxy to target and returns
-// the live connection + buffered reader, plus dial_ms (client->proxy) and
-// connect_ms (proxy upstream establishment). On error, conn is nil.
+// scn appends "_direct" to a scenario name when there's no proxy (baseline run).
+func scn(base string, proxy *url.URL) string {
+	if proxy == nil {
+		return base + "_direct"
+	}
+	return base
+}
+
+// openTunnel returns a live connection to target, plus dial_ms and connect_ms.
+// With a proxy: an HTTP CONNECT tunnel (connect_ms = proxy upstream establishment).
+// With proxy==nil: a DIRECT TCP dial to target (connect_ms = direct TCP connect,
+// the no-proxy baseline). On error, conn is nil.
 func openTunnel(proxy *url.URL, target string, timeout time.Duration) (net.Conn, *bufio.Reader, uint32, uint32, string) {
+	if proxy == nil {
+		start := time.Now()
+		conn, err := (&net.Dialer{Timeout: timeout}).Dial("tcp", target)
+		if err != nil {
+			return nil, nil, 0, 0, classify("dial", err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(timeout))
+		return conn, bufio.NewReader(conn), 0, ms(time.Since(start)), ""
+	}
 	start := time.Now()
 	conn, err := (&net.Dialer{Timeout: timeout}).Dial("tcp", proxy.Host)
 	if err != nil {
@@ -78,14 +96,14 @@ func getOverTunnel(conn net.Conn, br *bufio.Reader, host, path string, timeout t
 }
 
 // Streaming mimics heavy streaming/buffering: pull a large object and measure
-// sustained throughput + TTFB.
+// sustained throughput + TTFB. proxy==nil runs the direct (no-proxy) baseline.
 func Streaming(proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
-	return download("streaming", proxy, origin, sizeBytes, timeout)
+	return download(scn("streaming", proxy), proxy, origin, sizeBytes, timeout)
 }
 
 // LargeObject mimics the large-object archetype: a medium object; connect/TTFB matter.
 func LargeObject(proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
-	return download("large_object", proxy, origin, sizeBytes, timeout)
+	return download(scn("large_object", proxy), proxy, origin, sizeBytes, timeout)
 }
 
 func download(scenario string, proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
@@ -124,7 +142,7 @@ func download(scenario string, proxy *url.URL, origin string, sizeBytes int, tim
 func HifreqSmall(proxy *url.URL, origin string, k int, timeout time.Duration) []model.ProbeResult {
 	out := make([]model.ProbeResult, 0, k)
 	for i := 0; i < k; i++ {
-		r := model.ProbeResult{Scenario: "hifreq_small", Proto: "http", Target: origin, TS: time.Now().UTC()}
+		r := model.ProbeResult{Scenario: scn("hifreq_small", proxy), Proto: "http", Target: origin, TS: time.Now().UTC()}
 		start := time.Now()
 		conn, br, dialMs, connMs, et := openTunnel(proxy, origin, timeout)
 		r.DialMS, r.ConnectMS = dialMs, connMs
@@ -154,7 +172,7 @@ func HifreqSmall(proxy *url.URL, origin string, k int, timeout time.Duration) []
 func Scraping(proxy *url.URL, hosts []string, timeout time.Duration) []model.ProbeResult {
 	out := make([]model.ProbeResult, 0, len(hosts))
 	for _, h := range hosts {
-		r := model.ProbeResult{Scenario: "scraping", Proto: "http", Target: h, TS: time.Now().UTC()}
+		r := model.ProbeResult{Scenario: scn("scraping", proxy), Proto: "http", Target: h, TS: time.Now().UTC()}
 		start := time.Now()
 		conn, _, dialMs, connMs, et := openTunnel(proxy, h, timeout)
 		r.DialMS, r.ConnectMS = dialMs, connMs
@@ -175,7 +193,7 @@ func Scraping(proxy *url.URL, hosts []string, timeout time.Duration) []model.Pro
 // LongSession mimics long-maintained/persistent sessions: hold a tunnel open for
 // holdMs while the origin trickles bytes, and record how long it stayed up.
 func LongSession(proxy *url.URL, origin string, holdMs int, timeout time.Duration) model.ProbeResult {
-	r := model.ProbeResult{Scenario: "long_session", Proto: "http", Target: origin, TS: time.Now().UTC()}
+	r := model.ProbeResult{Scenario: scn("long_session", proxy), Proto: "http", Target: origin, TS: time.Now().UTC()}
 	start := time.Now()
 	conn, br, dialMs, connMs, et := openTunnel(proxy, origin, timeout)
 	r.DialMS, r.ConnectMS = dialMs, connMs

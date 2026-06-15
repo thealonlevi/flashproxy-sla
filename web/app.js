@@ -137,12 +137,24 @@ async function loadScenarios(pkg, vantage) {
   (d.scenarios || []).forEach((s) => { by[s.scenario] = s; });
   const host = document.getElementById("scenarios");
   host.innerHTML = SCN_ORDER.map((name) => {
-    const s = by[name];
-    const kpi = s && s.samples ? SCN_KPI[name](s) : "— no data";
-    const ok = s && s.samples ? (s.success_pct >= 98 ? "op" : (s.success_pct >= 90 ? "deg" : "dn")) : "nd";
-    const n = s && s.samples ? `n=${fmt(s.samples)}` : "";
+    const p = by[name];                  // via proxy
+    const dr = by[name + "_direct"];     // direct baseline (no proxy)
+    const have = p && p.samples;
+    const kpi = have ? SCN_KPI[name](p) : "— no data";
+    const ok = have ? (p.success_pct >= 98 ? "op" : (p.success_pct >= 90 ? "deg" : "dn")) : "nd";
+    let sub = "";
+    if (name !== "ping") {
+      const haveD = dr && dr.samples;
+      sub += `<div class="scn-direct">direct: ${haveD ? SCN_KPI[name](dr) : "—"}</div>`;
+      // proxy overhead for latency-style scenarios (connect-ms based)
+      if (have && haveD && name !== "streaming" && name !== "large_object") {
+        const d = Math.round(p.connect_ms_median - dr.connect_ms_median);
+        sub += `<div class="scn-delta">proxy ${d >= 0 ? "+" : ""}${d}ms</div>`;
+      }
+    }
+    const nn = have ? `n=${fmt(p.samples)}` : "";
     return `<div class="scn" data-st="${ok}"><div class="scn-name">${SCN_LABEL[name]}</div>` +
-           `<div class="scn-kpi">${kpi}</div><div class="scn-n">${n}</div></div>`;
+           `<div class="scn-kpi">${kpi}</div>${sub}<div class="scn-n">${nn}</div></div>`;
   }).join("");
 }
 
