@@ -131,10 +131,21 @@ func loadConfig(p string) Config {
 	return c
 }
 
+// redactURL strips any userinfo (user:pass@) from a URL string so proxy
+// credentials never reach logs.
+func redactURL(s string) string {
+	if i := strings.Index(s, "://"); i >= 0 {
+		if at := strings.Index(s[i+3:], "@"); at >= 0 {
+			return s[:i+3] + "***@" + s[i+3+at+1:]
+		}
+	}
+	return s
+}
+
 func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
 	proxy, err := url.Parse(t.ProxyURL)
 	if err != nil || proxy.Host == "" {
-		log.Printf("[%s] bad proxy_url %q: %v", t.Package, t.ProxyURL, err)
+		log.Printf("[%s] bad proxy_url %q: %v", t.Package, redactURL(t.ProxyURL), err)
 		return
 	}
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
