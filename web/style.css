@@ -143,3 +143,19 @@ html, body {
 .vchip[data-status="down"] { color: var(--dn); }
 .vchip[data-status="degraded"] { color: var(--deg); }
 .vchip[data-status="no_data"] { color: var(--nd); }
+
+/* archetype scenarios grid */
+.scn-head { padding: 12px 14px 6px; border-top: 1px solid var(--line); font-size: 12px; color: var(--ink); }
+.scn-head .muted { color: var(--muted); font-weight: 400; }
+.scenarios-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px; padding: 4px 14px 16px;
+}
+.scn { border: 1px solid var(--line); border-left-width: 3px; padding: 8px 10px; }
+.scn[data-st="op"]  { border-left-color: var(--op); }
+.scn[data-st="deg"] { border-left-color: var(--deg); }
+.scn[data-st="dn"]  { border-left-color: var(--dn); }
+.scn[data-st="nd"]  { border-left-color: var(--nd); }
+.scn-name { font-size: 11px; color: var(--muted); text-transform: lowercase; }
+.scn-kpi { font-size: 14px; font-weight: 600; margin: 2px 0; }
+.scn-n { font-size: 10px; color: var(--muted); }

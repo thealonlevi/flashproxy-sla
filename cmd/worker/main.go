@@ -39,14 +39,39 @@ type chConn struct {
 	Password string `json:"password"`
 }
 
+// ScenarioCfg holds intervals/sizes for the archetype scenarios (defaults applied
+// in loadConfig). The payload scenarios (streaming/large_object/hifreq/long_session)
+// run only when Origin is set; scraping/connect always run.
+type ScenarioCfg struct {
+	StreamingIntervalMS   int `json:"streaming_interval_ms"`
+	StreamingBytes        int `json:"streaming_bytes"`
+	LargeObjectIntervalMS int `json:"large_object_interval_ms"`
+	LargeObjectBytes      int `json:"large_object_bytes"`
+	HifreqIntervalMS      int `json:"hifreq_interval_ms"`
+	HifreqCount           int `json:"hifreq_count"`
+	ScrapingIntervalMS    int `json:"scraping_interval_ms"`
+	LongSessionIntervalMS int `json:"long_session_interval_ms"`
+	LongSessionHoldMS     int `json:"long_session_hold_ms"`
+}
+
 type Config struct {
-	Vantage    string   `json:"vantage"`
-	TimeoutMS  int      `json:"timeout_ms"`
-	Monitor    bool     `json:"monitor"`
-	Discord    string   `json:"discord_webhook"`
-	ClickHouse chConn   `json:"clickhouse"`
-	SLO        slo.SLO  `json:"slo"`
-	Targets    []Target `json:"targets"`
+	Vantage     string      `json:"vantage"`
+	TimeoutMS   int         `json:"timeout_ms"`
+	Monitor     bool        `json:"monitor"`
+	Discord     string      `json:"discord_webhook"`
+	ClickHouse  chConn      `json:"clickhouse"`
+	SLO         slo.SLO     `json:"slo"`
+	Origin      string      `json:"origin"`       // host:port of a self-hosted origin for payload scenarios
+	ScrapeHosts []string    `json:"scrape_hosts"` // CONNECT targets for the scraping scenario
+	Scenarios   ScenarioCfg `json:"scenarios"`
+	Targets     []Target    `json:"targets"`
+}
+
+func defInt(v, d int) int {
+	if v <= 0 {
+		return d
+	}
+	return v
 }
 
 func main() {
@@ -81,29 +106,77 @@ func loadConfig(p string) Config {
 	if err := json.Unmarshal(b, &c); err != nil {
 		log.Fatalf("parse config: %v", err)
 	}
+	s := &c.Scenarios
+	s.StreamingIntervalMS = defInt(s.StreamingIntervalMS, 120000)
+	s.StreamingBytes = defInt(s.StreamingBytes, 5*1024*1024)
+	s.LargeObjectIntervalMS = defInt(s.LargeObjectIntervalMS, 60000)
+	s.LargeObjectBytes = defInt(s.LargeObjectBytes, 262144)
+	s.HifreqIntervalMS = defInt(s.HifreqIntervalMS, 60000)
+	s.HifreqCount = defInt(s.HifreqCount, 10)
+	s.ScrapingIntervalMS = defInt(s.ScrapingIntervalMS, 60000)
+	s.LongSessionIntervalMS = defInt(s.LongSessionIntervalMS, 180000)
+	s.LongSessionHoldMS = defInt(s.LongSessionHoldMS, 20000)
+	if len(c.ScrapeHosts) == 0 {
+		c.ScrapeHosts = []string{
+			"www.google.com:443", "www.cloudflare.com:443", "www.microsoft.com:443",
+			"www.amazon.com:443", "www.wikipedia.org:443",
+		}
+	}
 	return c
 }
 
 func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
-	interval := t.IntervalMS
-	if interval <= 0 {
-		interval = 20000
-	}
 	proxy, err := url.Parse(t.ProxyURL)
 	if err != nil || proxy.Host == "" {
 		log.Printf("[%s] bad proxy_url %q: %v", t.Package, t.ProxyURL, err)
 		return
 	}
 	timeout := time.Duration(cfg.TimeoutMS) * time.Millisecond
-	ticker := time.NewTicker(time.Duration(interval) * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		r := probe.ConnectScenario(proxy, t.ConnectTarget, t.OriginGet, timeout)
-		r.Vantage = cfg.Vantage
-		r.Package = t.Package
-		r.IPVersion = t.IPVersion
-		out <- r
-		<-ticker.C
+	streamTimeout := 60 * time.Second // big downloads need a generous deadline
+
+	emit := func(rs ...model.ProbeResult) {
+		for i := range rs {
+			rs[i].Vantage = cfg.Vantage
+			rs[i].Package = t.Package
+			rs[i].IPVersion = t.IPVersion
+			out <- rs[i]
+		}
+	}
+	// loop runs fn immediately, then every intervalMs.
+	loop := func(intervalMs int, fn func()) {
+		if intervalMs <= 0 {
+			return
+		}
+		tk := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+		defer tk.Stop()
+		for {
+			fn()
+			<-tk.C
+		}
+	}
+
+	s := cfg.Scenarios
+	// connect (the SLA headline) + scraping always run.
+	go loop(defInt(t.IntervalMS, 20000), func() {
+		emit(probe.ConnectScenario(proxy, t.ConnectTarget, t.OriginGet, timeout))
+	})
+	go loop(s.ScrapingIntervalMS, func() {
+		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)
+	})
+	// payload scenarios need the self-hosted origin.
+	if cfg.Origin != "" {
+		go loop(s.StreamingIntervalMS, func() {
+			emit(probe.Streaming(proxy, cfg.Origin, s.StreamingBytes, streamTimeout))
+		})
+		go loop(s.LargeObjectIntervalMS, func() {
+			emit(probe.LargeObject(proxy, cfg.Origin, s.LargeObjectBytes, timeout))
+		})
+		go loop(s.HifreqIntervalMS, func() {
+			emit(probe.HifreqSmall(proxy, cfg.Origin, s.HifreqCount, timeout)...)
+		})
+		go loop(s.LongSessionIntervalMS, func() {
+			emit(probe.LongSession(proxy, cfg.Origin, s.LongSessionHoldMS, timeout))
+		})
 	}
 }
 
@@ -116,9 +189,11 @@ func flusher(ch *chstore.Client, in <-chan model.ProbeResult) {
 		if len(buf) == 0 {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		if err := ch.InsertProbes(ctx, buf); err != nil {
 			log.Printf("insert %d rows: %v", len(buf), err)
+		} else {
+			log.Printf("flushed %d probes", len(buf))
 		}
 		cancel()
 		buf = buf[:0]
@@ -127,7 +202,6 @@ func flusher(ch *chstore.Client, in <-chan model.ProbeResult) {
 		select {
 		case r := <-in:
 			buf = append(buf, r)
-			log.Printf("[%s] connect_ms=%d dial_ms=%d success=%d err=%q", r.Package, r.ConnectMS, r.DialMS, r.Success, r.ErrorType)
 			if len(buf) >= 200 {
 				flush()
 			}

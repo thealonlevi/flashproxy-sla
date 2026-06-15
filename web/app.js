@@ -110,6 +110,39 @@ async function loadSeries() {
     d = await (await fetch(`api/series?package=${encodeURIComponent(selected)}&minutes=${curMin}&vantage=${encodeURIComponent(v)}`)).json();
   } catch (e) { return; }
   drawChart(d.points || []);
+  loadScenarios(selected, v);
+}
+
+const SCN_ORDER = ["connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
+const SCN_LABEL = {
+  connect: "connect", streaming: "streaming", large_object: "large object",
+  hifreq_small: "hi-freq small", scraping: "scraping", long_session: "long session",
+};
+const SCN_KPI = {
+  connect: (s) => `${fmt(s.connect_ms_median)}ms connect`,
+  streaming: (s) => `${fmt(s.throughput_mbps_avg)} Mbps`,
+  large_object: (s) => `${fmt(s.ttfb_ms_median)}ms ttfb`,
+  hifreq_small: (s) => `${fmt(s.connect_ms_median)}ms/conn · ${fmt(s.success_pct)}%`,
+  scraping: (s) => `${fmt(s.connect_ms_median)}ms median`,
+  long_session: (s) => `${fmt(s.success_pct)}% held · ${fmt(s.total_ms_median / 1000)}s`,
+};
+
+async function loadScenarios(pkg, vantage) {
+  let d;
+  try {
+    d = await (await fetch(`api/scenarios?package=${encodeURIComponent(pkg)}&vantage=${encodeURIComponent(vantage)}`)).json();
+  } catch (e) { return; }
+  const by = {};
+  (d.scenarios || []).forEach((s) => { by[s.scenario] = s; });
+  const host = document.getElementById("scenarios");
+  host.innerHTML = SCN_ORDER.map((name) => {
+    const s = by[name];
+    const kpi = s && s.samples ? SCN_KPI[name](s) : "— no data";
+    const ok = s && s.samples ? (s.success_pct >= 98 ? "op" : (s.success_pct >= 90 ? "deg" : "dn")) : "nd";
+    const n = s && s.samples ? `n=${fmt(s.samples)}` : "";
+    return `<div class="scn" data-st="${ok}"><div class="scn-name">${SCN_LABEL[name]}</div>` +
+           `<div class="scn-kpi">${kpi}</div><div class="scn-n">${n}</div></div>`;
+  }).join("");
 }
 
 function drawChart(points) {

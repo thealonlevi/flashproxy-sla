@@ -65,6 +65,7 @@ func main() {
 	mux.HandleFunc("/api/overview", s.handleOverview)
 	mux.HandleFunc("/api/status", s.handleStatus)
 	mux.HandleFunc("/api/series", s.handleSeries)
+	mux.HandleFunc("/api/scenarios", s.handleScenarios)
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
@@ -308,6 +309,40 @@ GROUP BY t ORDER BY t`, s.cfg.ClickHouse.DB, pkg, vantageFilter, mins)
 		return
 	}
 	writeJSON(w, map[string]any{"package": pkg, "minutes": mins, "points": rows})
+}
+
+// handleScenarios returns per-archetype-scenario stats for one package (optionally
+// one vantage) over the last 10 minutes.
+func (s *server) handleScenarios(w http.ResponseWriter, r *http.Request) {
+	pkg := r.URL.Query().Get("package")
+	if !pkgRe.MatchString(pkg) {
+		http.Error(w, "bad package", http.StatusBadRequest)
+		return
+	}
+	vf := ""
+	if v := r.URL.Query().Get("vantage"); v != "" {
+		if !pkgRe.MatchString(v) {
+			http.Error(w, "bad vantage", http.StatusBadRequest)
+			return
+		}
+		vf = fmt.Sprintf(" AND vantage = '%s'", v)
+	}
+	sql := fmt.Sprintf(`SELECT scenario,
+  toUInt32(count())                      AS samples,
+  round(100 * sum(success) / count(), 2) AS success_pct,
+  round(quantile(0.5)(connect_ms), 1)    AS connect_ms_median,
+  round(quantile(0.5)(ttfb_ms), 1)       AS ttfb_ms_median,
+  round(avg(throughput_mbps), 1)         AS throughput_mbps_avg,
+  round(quantile(0.5)(total_ms), 1)      AS total_ms_median
+FROM %s.probe_raw
+WHERE package = '%s'%s AND ts > now() - INTERVAL 10 MINUTE
+GROUP BY scenario ORDER BY scenario`, s.cfg.ClickHouse.DB, pkg, vf)
+	rows, err := s.ch.QueryJSON(r.Context(), sql)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"package": pkg, "scenarios": rows})
 }
 
 // handleEvents is GET-only here (read-only website). Markers are written by the
