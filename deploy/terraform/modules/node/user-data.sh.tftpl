@@ -51,14 +51,24 @@ cat >/opt/flashproxy/config/worker.json <<'JSON'
   "timeout_ms": 10000,
   "monitor": ${run_website},
   "origin": "__ORIGIN__",
+  "origin_ipv6": "__ORIGIN6__",
   "clickhouse": { "url": "${ch_url}", "db": "sla", "user": "flashproxy-status-worker", "password": "${ch_worker_password}" },
   "slo": { "connect_ms_median_warn": 120, "connect_ms_median_crit": 400, "success_pct_warn": 98.0, "success_pct_crit": 90.0, "stale_seconds": 120 },
   "targets": ${targets_json}
 }
 JSON
-# Origin for payload scenarios = this instance's public IP:8080 (the origin we run).
+# Origins for payload scenarios = this instance's own origin on :8080.
+# v4 = public IPv4 (the EIP); v6 = the instance's public IPv6, so ipv6-egress
+# packages can reach it. Both come from IMDS.
 PUBIP=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/public-ipv4 || true)
 sed -i "s|__ORIGIN__|$${PUBIP}:8080|" /opt/flashproxy/config/worker.json
+MAC=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d /)
+PUB6=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/network/interfaces/macs/$${MAC}/ipv6s | head -1)
+if [ -n "$${PUB6}" ]; then
+  sed -i "s|__ORIGIN6__|[$${PUB6}]:8080|" /opt/flashproxy/config/worker.json
+else
+  sed -i 's|"origin_ipv6": "__ORIGIN6__"|"origin_ipv6": ""|' /opt/flashproxy/config/worker.json
+fi
 mk_unit flashproxy-worker "/opt/flashproxy/worker -config=/opt/flashproxy/config/worker.json"
 %{ endif ~}
 

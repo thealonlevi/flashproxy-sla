@@ -31,9 +31,50 @@ resource "aws_key_pair" "this" {
   public_key = var.ssh_public_key
 }
 
+# Dedicated dual-stack VPC so ipv6-egress packages can reach the origin over v6.
+resource "aws_vpc" "this" {
+  cidr_block                       = "10.10.0.0/16"
+  assign_generated_ipv6_cidr_block = true
+  enable_dns_hostnames             = true
+  tags                             = { Name = var.name }
+}
+
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+  tags   = { Name = var.name }
+}
+
+resource "aws_subnet" "this" {
+  vpc_id                          = aws_vpc.this.id
+  cidr_block                      = "10.10.1.0/24"
+  ipv6_cidr_block                 = cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, 1)
+  map_public_ip_on_launch         = true
+  assign_ipv6_address_on_creation = true
+  tags                            = { Name = var.name }
+}
+
+resource "aws_route_table" "this" {
+  vpc_id = aws_vpc.this.id
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.this.id
+  }
+  route {
+    ipv6_cidr_block = "::/0"
+    gateway_id      = aws_internet_gateway.this.id
+  }
+  tags = { Name = var.name }
+}
+
+resource "aws_route_table_association" "this" {
+  subnet_id      = aws_subnet.this.id
+  route_table_id = aws_route_table.this.id
+}
+
 resource "aws_security_group" "this" {
   name        = var.name
   description = "flashproxy-status node"
+  vpc_id      = aws_vpc.this.id
 
   ingress {
     description = "SSH (admin only)"
@@ -92,7 +133,9 @@ resource "aws_instance" "this" {
   ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   key_name               = aws_key_pair.this.key_name
+  subnet_id              = aws_subnet.this.id
   vpc_security_group_ids = [aws_security_group.this.id]
+  ipv6_address_count     = 1 # dual-stack: origin reachable over v6 for ipv6 packages
 
   # Don't recreate a running instance just because user-data text changed
   # (we reconcile in place); only a deliberate -replace rebuilds it.
