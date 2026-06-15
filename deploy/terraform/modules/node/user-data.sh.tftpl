@@ -15,14 +15,13 @@ mkdir -p /etc/systemd/resolved.conf.d
 printf '[Resolve]\nDNS=1.1.1.1 1.0.0.1 2606:4700:4700::1111 2606:4700:4700::1001\nDomains=~.\n' >/etc/systemd/resolved.conf.d/cloudflare.conf
 systemctl restart systemd-resolved || true
 
-# Go toolchain — download and VERIFY against go.dev's published SHA-256 before use,
-# so a corrupted/partial download (or CDN tamper) can't yield a malicious compiler
-# that handles our credentials. cloud-init runs as root with no $HOME, so set
-# HOME/GOCACHE explicitly.
+# Go toolchain — download and VERIFY against a PINNED SHA-256 (from go.dev's release
+# JSON; supply it via the go_sha256 var) before use, so a corrupted/partial download
+# (or CDN tamper) can't yield a malicious compiler that handles our credentials.
+# cloud-init runs as root with no $HOME, so set HOME/GOCACHE explicitly.
 GOTGZ=go${go_version}.linux-${go_arch}.tar.gz
 curl -fsSL -o /tmp/$GOTGZ "https://go.dev/dl/$GOTGZ"
-curl -fsSL -o /tmp/$GOTGZ.sha256 "https://go.dev/dl/$GOTGZ.sha256"
-echo "$(cat /tmp/$GOTGZ.sha256)  /tmp/$GOTGZ" | sha256sum -c -
+echo "${go_sha256}  /tmp/$GOTGZ" | sha256sum -c -
 tar -C /usr/local -xzf /tmp/$GOTGZ
 GO=/usr/local/go/bin/go
 export HOME=/root

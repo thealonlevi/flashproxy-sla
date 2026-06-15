@@ -158,6 +158,7 @@ resource "aws_instance" "this" {
     git_ref             = var.git_ref
     go_arch             = var.go_arch
     go_version          = var.go_version
+    go_sha256           = var.go_sha256
     vantage             = var.vantage
     run_website         = var.run_website
     run_worker          = var.run_worker

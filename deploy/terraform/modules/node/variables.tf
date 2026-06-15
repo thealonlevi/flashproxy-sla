@@ -17,6 +17,12 @@ variable "go_version" {
   type    = string
   default = "1.25.0"
 }
+# SHA-256 of go<version>.linux-<arch>.tar.gz from https://go.dev/dl/?mode=json
+# (default is go1.25.0 linux-arm64). Keep in sync with go_version/go_arch.
+variable "go_sha256" {
+  type    = string
+  default = "05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae"
+}
 
 # Integrity-ledger signing. Only the monitor node (run_website) needs the private
 # key; it signs checkpoints for ALL streams. The public key is published by the
