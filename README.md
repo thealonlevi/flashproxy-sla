@@ -10,89 +10,95 @@ any internal/production data source. Clone it, point it at any proxy, and you ge
 the same dashboard.
 
 ```
- origin ──▶ [proxy under test] ──▶ prober ──▶ collector ──▶ own ClickHouse ──▶ public page
-   (deterministic upstream)      (synthetic   (ingest +        (system of      (status.* )
-                                  scenarios)    SLO + alerts)    record)
+ origin ──▶ [proxy under test] ──▶ worker ──▶ own ClickHouse ──▶ website ──▶ public page
+   (deterministic upstream)      (probes +     (system of       (read-only   (status.* )
+                                  writes,        record)          renderer)
+                                  writer role)
 ```
 
 The only thing crossing into the system from the outside is the **proxy endpoint
-+ credentials** you put in config — an input, not a data source.
++ credentials** you put in config — an input, not a data source. Read and write are
+split by ClickHouse role, so you can run **N workers** (e.g. one VM per region, or
+per package) all writing to one ClickHouse, with a read-only website on top.
 
 ## Quick start
 
 ```bash
-# Bring up ClickHouse + origin + collector + frontend (no real proxy needed):
+# Bring up ClickHouse + origin + website (no real proxy needed):
 docker compose up --build
-# open http://localhost:8080  (the page renders; it shows "no data" until a prober runs)
+# open http://localhost:8080  (renders; shows "no data" until a worker runs)
 
-# Add a prober against your own proxy to see live numbers:
+# Add a worker against your own proxy to see live numbers:
 ISP_PROXY_URL='http://USER:PASS@HOST:30' docker compose --profile demo up --build
 ```
 
-The demo prober opens an HTTP CONNECT tunnel through your proxy to the bundled
-origin every 15s and records `connect_ms`. Cards turn green and the chart fills in.
+The demo worker opens an HTTP CONNECT tunnel through your proxy every 15s and
+records `connect_ms` directly into ClickHouse. Cards turn green and the chart fills.
 
 ## What it measures
 
-Per package, per vantage, the headline KPIs you asked any proxy SLA to have:
+Per package, per vantage:
 
 - **average connect-ms** and **median connect-ms** (the time the *proxy* takes to
   establish the upstream connection — `CONNECT` → `200`),
 - success rate, p95 connect-ms, dial-ms (client→proxy, kept separate to localize
   regressions), and TTFB against the deterministic origin.
 
-Connect latency is the Phase-1 scenario. The roadmap adds one scenario per
-archetype (streaming/buffering, large-object, hi-freq small-payload bots, broad
-scraping, long-maintained sessions) — each records the same `connect_ms` plus its
-own KPI (throughput, setup rate, stability).
+Connect latency is the first scenario; the roadmap adds one per archetype
+(streaming/buffering, large-object, hi-freq small-payload bots, broad scraping,
+long-maintained sessions) — each recording the same `connect_ms` plus its own KPI.
 
 ## Architecture
 
 | Component | What it does |
 |---|---|
 | `cmd/origin` | Deterministic dual-stack upstream (`/connect`, `/bytes/{n}`, `/small`, `/hold`). Pure SLA signal, no third-party variance. |
-| `cmd/prober` | Runs scenarios from one vantage (e.g. `us-east`, `eu-west`), ships results to the collector. The only component that touches a real proxy. |
-| `cmd/collector` | Ingests results → its own ClickHouse, evaluates SLO, fires Discord alerts on status change, serves the JSON API + static page. Only ClickHouse writer. |
-| `internal/chstore` | Stdlib-only ClickHouse client over the HTTP interface. The storage interface; swap for Postgres/SQLite. |
-| `web/` | Framework-free status page. |
+| `cmd/worker` | Runs scenarios from one vantage, writes results **directly** to ClickHouse as the `sla_writer` role. The only component that touches a real proxy. Run as many as you like. Set `"monitor": true` on one to also evaluate SLO + fire Discord alerts. |
+| `cmd/website` | **Read-only.** Serves the JSON API + status page as the `sla_reader` role; never writes. Publishes the public read-only key at `/api/meta`. |
+| `internal/{probe,slo,chstore,model}` | Scenarios, SLO evaluation, stdlib-only ClickHouse HTTP client, shared types. |
+| `web/` | Framework-free console-style status page. |
 
 Dependency-free Go (stdlib only) — builds offline, trivially reproducible.
 
+## ClickHouse roles
+
+`schema/clickhouse.sql` creates the tables; `schema/roles.sql` creates two roles and
+three users (concurrency-capped via `max_concurrent_queries_for_user`):
+
+| User | Role | Cap | Use |
+|---|---|---|---|
+| `flashproxy-status-public` | `sla_reader` | 500 | **published** on the status page — anyone can reproduce it |
+| `flashproxy-status-website` | `sla_reader` | 50 | the website renders with this |
+| `flashproxy-status-worker` | `sla_writer` | 200 | workers push probe results |
+
+> SQL-created users need a writeable access storage (`<local_directory>` under
+> `user_directories`) or ClickHouse errors with "no writeable access storage".
+
 ## Configuration
 
-Configs are JSON with `${ENV}` expansion so secrets never live in the file.
+JSON with `${ENV}` expansion so secrets never live in the file.
 
-- `config/collector.example.json` — listen addr, ingest token, ClickHouse creds, SLO thresholds, Discord webhook.
-- `config/prober.example.json` — vantage id, collector URL, and the list of
-  packages → `proxy_url` (e.g. `${ISP_PROXY_URL}`), the origin to CONNECT to, and IP version.
+- `config/website.example.json` — listen addr, ClickHouse (reader) creds, the public
+  key to publish, SLO thresholds.
+- `config/worker.example.json` — vantage id, ClickHouse (writer) creds, and the list
+  of packages → `proxy_url` (e.g. `${ISP_PROXY_URL}`), target, and IP version.
 
-### Deploy/maintenance markers
+## Deploy
 
-`POST /api/events` records a self-owned marker (shown on the timeline):
-
-```bash
-curl -XPOST localhost:8080/api/events -H 'Authorization: Bearer <token>' \
-  -d '{"type":"deploy","package":"isp","message":"deployed abc1234"}'
-```
-
-Wire your CI to this if you want deploy annotations — optional, no data dependency.
-
-## Production shape (status.flashproxy.com)
-
-- Probers on small VMs in **US and EU** (EU vantage maps to `isp_eu`); push to the collector over HTTPS with a bearer token.
-- Dual-stack origin per region so `ipv6` / `ipv6-datacenter` exercise v6 egress.
-- One synthetic monitoring user **per package** on the proxy side (exempt from
-  data caps + connection limits; a recognizable username prefix so they're easy to
-  filter out of billing/analytics).
-- Front the collector with a tunnel/CDN; the public page is cacheable.
+- `deploy/clickhouse-deploy-prompt.md` — runbook to bring up a self-hosted ClickHouse
+  on a bare metal: loopback-bind + reserved ports, the three roles, exposed only via a
+  Cloudflare tunnel (`ch.flashproxy.com`).
+- `deploy/terraform/` — two-region AWS (Ashburn + Frankfurt) workers + origin +
+  website on `t4g.small`, dual-stack. Secrets via env / `*.tfvars` (gitignored).
+- CI (`.github/workflows/docker.yml`) builds the multi-arch image to
+  `ghcr.io/<owner>/flashproxy-sla`.
 
 ## Roadmap
 
-- **Phase 1 (this scaffold):** connect scenario, US vantage, ClickHouse, status page, Discord alerts. ← average/median connect-ms end-to-end.
-- **Phase 2:** streaming / large-object / hi-freq / scraping / long-session scenarios; EU vantage; throughput & stability KPIs.
-- **Phase 3:** baseline-relative anomaly detection + error-budget / 90-day uptime, all from self-recorded history.
-- **Phase 4:** full public frontend (per-archetype, vantage compare, incident timeline).
-- **Phase 5:** Postgres/SQLite store backends, CI, published images.
+- ✅ connect scenario, worker/website split, ClickHouse role model, status page, Discord alerts, AWS Terraform.
+- **Next:** streaming / large-object / hi-freq / scraping / long-session scenarios; throughput & stability KPIs.
+- baseline-relative anomaly detection + error-budget / 90-day uptime from self-recorded history.
+- per-archetype frontend, vantage compare, incident timeline; Postgres/SQLite store backends.
 
 ## License
 

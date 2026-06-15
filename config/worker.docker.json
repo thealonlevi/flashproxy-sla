@@ -1,0 +1,10 @@
+{
+  "vantage": "local-demo",
+  "timeout_ms": 8000,
+  "monitor": true,
+  "clickhouse": { "url": "http://clickhouse:8123", "db": "sla", "user": "sla", "password": "sla" },
+  "slo": { "connect_ms_median_warn": 120, "connect_ms_median_crit": 400, "success_pct_warn": 98.0, "success_pct_crit": 90.0, "stale_seconds": 120 },
+  "targets": [
+    { "package": "isp", "proxy_url": "${ISP_PROXY_URL}", "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 15000 }
+  ]
+}

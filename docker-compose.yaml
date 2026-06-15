@@ -1,6 +1,8 @@
-# Brings up the entire closed system: its own ClickHouse + origin + collector +
-# public frontend. `docker compose up` and open http://localhost:8080.
-# The prober is in the optional `demo` profile because it needs a real proxy:
+# Local demo of the whole closed system: its own ClickHouse + origin + website.
+# `docker compose up` then open http://localhost:8080.
+# For simplicity the demo uses the `sla` admin user; production uses the three
+# scoped roles in schema/roles.sql. The worker needs a real proxy, so it's in the
+# optional `demo` profile:
 #   ISP_PROXY_URL='http://user:pass@host:30' docker compose --profile demo up
 services:
   clickhouse:
@@ -24,27 +26,26 @@ services:
   origin:
     build: .
     command: ["/app/origin", "-addr=:8080"]
-    ports: ["8081:8080"]   # exposed for local poking; the proxy reaches it in-network
+    ports: ["8081:8080"]
 
-  collector:
+  website:
     build: .
-    command: ["/app/collector", "-config=/app/config/collector.json"]
+    command: ["/app/website", "-config=/app/config/website.json"]
+    depends_on:
+      clickhouse: { condition: service_healthy }
+    volumes:
+      - ./config/website.docker.json:/app/config/website.json:ro
+    ports: ["8080:8080"]
+
+  worker:
+    build: .
+    command: ["/app/worker", "-config=/app/config/worker.json"]
     depends_on:
       clickhouse: { condition: service_healthy }
     environment:
-      DISCORD_WEBHOOK: ${DISCORD_WEBHOOK:-}
-    volumes:
-      - ./config/collector.docker.json:/app/config/collector.json:ro
-    ports: ["8080:8080"]
-
-  prober:
-    build: .
-    command: ["/app/prober", "-config=/app/config/prober.json"]
-    depends_on: [collector, origin]
-    environment:
       ISP_PROXY_URL: ${ISP_PROXY_URL:-}
     volumes:
-      - ./config/prober.docker.json:/app/config/prober.json:ro
+      - ./config/worker.docker.json:/app/config/worker.json:ro
     profiles: ["demo"]
 
 volumes:

@@ -11,6 +11,7 @@ website
 # Only *.example.json is committed.
 /config/*.json
 !/config/*.example.json
+!/config/*.docker.json
 *.local.json
 
 # Env files

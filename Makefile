@@ -1,15 +1,15 @@
-.PHONY: build origin collector prober vet test up demo clean
+.PHONY: build origin worker website vet test up demo clean
 
-build: origin collector prober
+build: origin worker website
 
 origin:
 	CGO_ENABLED=0 go build -trimpath -o bin/origin ./cmd/origin
 
-collector:
-	CGO_ENABLED=0 go build -trimpath -o bin/collector ./cmd/collector
+worker:
+	CGO_ENABLED=0 go build -trimpath -o bin/worker ./cmd/worker
 
-prober:
-	CGO_ENABLED=0 go build -trimpath -o bin/prober ./cmd/prober
+website:
+	CGO_ENABLED=0 go build -trimpath -o bin/website ./cmd/website
 
 vet:
 	go vet ./...
