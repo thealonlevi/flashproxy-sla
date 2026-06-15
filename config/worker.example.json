@@ -9,6 +9,22 @@
     "user": "flashproxy-status-worker",
     "password": "${SLA_WORKER_PASSWORD}"
   },
+
+  "origin": "${ORIGIN_HOST}:8080",
+  "origin_ipv6": "[${ORIGIN_IPV6}]:8080",
+  "scrape_hosts": [
+    "www.google.com:443", "www.cloudflare.com:443", "www.facebook.com:443",
+    "www.wikipedia.org:443", "www.microsoft.com:443"
+  ],
+  "scenarios": {
+    "ping_interval_ms": 15000, "ping_count": 3,
+    "streaming_interval_ms": 120000, "streaming_bytes": 5242880,
+    "large_object_interval_ms": 60000, "large_object_bytes": 262144,
+    "hifreq_interval_ms": 60000, "hifreq_count": 10,
+    "scraping_interval_ms": 60000,
+    "long_session_interval_ms": 180000, "long_session_hold_ms": 20000
+  },
+
   "slo": {
     "connect_ms_median_warn": 120,
     "connect_ms_median_crit": 400,
@@ -16,11 +32,12 @@
     "success_pct_crit": 90.0,
     "stale_seconds": 120
   },
+
   "targets": [
-    { "package": "isp",             "proxy_url": "${ISP_PROXY_URL}",        "connect_target": "www.google.com:443",  "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "datacenter",      "proxy_url": "${DC_PROXY_URL}",         "connect_target": "www.google.com:443",  "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "ipv6",            "proxy_url": "${IPV6_PROXY_URL}",       "connect_target": "www.google.com:443",  "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "ipv6-datacenter", "proxy_url": "${IPV6_DC_PROXY_URL}",    "connect_target": "www.google.com:443",  "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "isp_eu",          "proxy_url": "${ISP_EU_PROXY_URL}",     "connect_target": "www.google.com:443",  "origin_get": "", "ip_version": 4, "interval_ms": 20000 }
+    { "package": "isp",              "proxy_url": "${ISP_PROXY_URL}",     "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
+    { "package": "datacenter",       "proxy_url": "${DC_PROXY_URL}",      "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
+    { "package": "ipv6-residential", "proxy_url": "${IPV6_PROXY_URL}",    "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
+    { "package": "ipv6-datacenter",  "proxy_url": "${IPV6_DC_PROXY_URL}", "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
+    { "package": "isp_eu",           "proxy_url": "${ISP_EU_PROXY_URL}",  "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 }
   ]
 }
