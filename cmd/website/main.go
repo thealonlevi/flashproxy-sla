@@ -9,11 +9,15 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/flashproxy/flashproxy-status/internal/chstore"
@@ -40,6 +44,7 @@ type publicCH struct {
 type Config struct {
 	Listen           string   `json:"listen"`
 	WebDir           string   `json:"web_dir"`
+	SiteURL          string   `json:"site_url"` // canonical URL for SEO (no trailing slash)
 	TLSCertFile      string   `json:"tls_cert_file"`
 	TLSKeyFile       string   `json:"tls_key_file"`
 	ClickHouse       chConn   `json:"clickhouse"`
@@ -50,8 +55,10 @@ type Config struct {
 var pkgRe = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
 
 type server struct {
-	cfg Config
-	ch  *chstore.Client
+	cfg    Config
+	ch     *chstore.Client
+	tmpl   *template.Template
+	static http.Handler
 }
 
 func main() {
@@ -59,7 +66,12 @@ func main() {
 	flag.Parse()
 
 	cfg := loadConfig(*cfgPath)
-	s := &server{cfg: cfg, ch: chstore.New(cfg.ClickHouse.URL, cfg.ClickHouse.DB, cfg.ClickHouse.User, cfg.ClickHouse.Password)}
+	s := &server{
+		cfg:    cfg,
+		ch:     chstore.New(cfg.ClickHouse.URL, cfg.ClickHouse.DB, cfg.ClickHouse.User, cfg.ClickHouse.Password),
+		tmpl:   template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "index.html.tmpl"))),
+		static: http.FileServer(http.Dir(cfg.WebDir)),
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/overview", s.handleOverview)
@@ -69,7 +81,10 @@ func main() {
 	mux.HandleFunc("/api/events", s.handleEvents)
 	mux.HandleFunc("/api/meta", s.handleMeta)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
-	mux.Handle("/", noCache(http.FileServer(http.Dir(cfg.WebDir))))
+	mux.HandleFunc("/robots.txt", s.handleRobots)
+	mux.HandleFunc("/sitemap.xml", s.handleSitemap)
+	mux.HandleFunc("/llms.txt", s.handleLLMs)
+	mux.HandleFunc("/", s.handleRoot) // SSR for "/", static for everything else
 
 	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
 		log.Printf("website (read-only, TLS) listening on %s as ch-user=%q", cfg.Listen, cfg.ClickHouse.User)
@@ -92,6 +107,10 @@ func loadConfig(p string) Config {
 	if c.Listen == "" {
 		c.Listen = ":8080"
 	}
+	if c.SiteURL == "" {
+		c.SiteURL = "https://status.flashproxy.com"
+	}
+	c.SiteURL = strings.TrimRight(c.SiteURL, "/")
 	if c.WebDir == "" {
 		c.WebDir = "web"
 	}
@@ -364,6 +383,147 @@ func (s *server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleMeta(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"public_clickhouse": s.cfg.PublicClickHouse})
+}
+
+// --- SEO / GEO: server-side rendered home + crawler files ---
+
+type idxProduct struct {
+	Name        string
+	Status      string // operational|degraded|down|no_data
+	StatusLabel string
+	Median      int
+	Vantage     string
+}
+
+type idxData struct {
+	SiteURL       string
+	OverallStatus string
+	OverallLabel  string
+	Updated       string
+	Products      []idxProduct
+	JSONLD        template.HTML
+}
+
+// jsonLD is the schema.org structured data (Organization + WebSite + FAQPage) for
+// SEO + GEO. Built as a string and injected raw (template.HTML) so html/template
+// doesn't mangle the JSON inside the <script>.
+const jsonLD = `[
+{"@context":"https://schema.org","@type":"Organization","name":"FlashProxy","url":"https://flashproxy.com","description":"High-performance HTTP and SOCKS5 proxies with Shared ISP, Datacenter, IPv6 Datacenter, and IPv6 Residential IP options."},
+{"@context":"https://schema.org","@type":"WebSite","name":"FlashProxy Status","url":"https://status.flashproxy.com"},
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
+{"@type":"Question","name":"Is FlashProxy operational right now?","acceptedAnswer":{"@type":"Answer","text":"FlashProxy's live operational status, uptime, and latency are published on status.flashproxy.com and updated continuously from US and EU vantage points."}},
+{"@type":"Question","name":"What proxy products does FlashProxy offer?","acceptedAnswer":{"@type":"Answer","text":"FlashProxy offers Shared ISP proxies (USA and EU), Datacenter proxies, IPv6 Datacenter proxies, and IPv6 Residential proxies, over HTTP and SOCKS5."}},
+{"@type":"Question","name":"How is FlashProxy uptime and latency measured?","acceptedAnswer":{"@type":"Answer","text":"Synthetic probes run continuously from multiple regions, measuring proxy connect latency, gateway ping RTT, throughput, success rate, and a direct no-proxy baseline for each product. The methodology is open source."}}
+]}
+]`
+
+var statusLabel = map[string]string{
+	"operational": "Operational", "degraded": "Degraded",
+	"down": "Down", "no_data": "No data",
+}
+
+// buildIndex computes a current snapshot (best vantage per product) for SSR.
+func (s *server) buildIndex(r *http.Request) idxData {
+	d := idxData{SiteURL: s.cfg.SiteURL, OverallStatus: "no_data", OverallLabel: "Awaiting Data", Updated: "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"), JSONLD: template.HTML(jsonLD)}
+	cur, err := slo.FetchByVantage(r.Context(), s.ch, s.cfg.ClickHouse.DB, s.cfg.SLO)
+	if err != nil {
+		return d
+	}
+	type best struct {
+		st  slo.Status
+		set bool
+	}
+	byPkg := map[string]*best{}
+	order := []string{}
+	for _, st := range cur {
+		b := byPkg[st.Package]
+		if b == nil {
+			b = &best{}
+			byPkg[st.Package] = b
+			order = append(order, st.Package)
+		}
+		better := !b.set ||
+			(st.Status != "no_data" && b.st.Status == "no_data") ||
+			(st.Status != "no_data" && b.st.Status != "no_data" && st.ConnectMsMedian < b.st.ConnectMsMedian)
+		if better {
+			b.st = st
+			b.set = true
+		}
+	}
+	sort.Strings(order)
+	statuses := []string{}
+	for _, pkg := range order {
+		st := byPkg[pkg].st
+		d.Products = append(d.Products, idxProduct{
+			Name: pkg, Status: st.Status, StatusLabel: statusLabel[st.Status],
+			Median: int(st.ConnectMsMedian + 0.5), Vantage: strings.TrimPrefix(st.Vantage, "aws-"),
+		})
+		statuses = append(statuses, st.Status)
+	}
+	if len(statuses) > 0 {
+		d.OverallStatus, d.OverallLabel = slo.Overall(statuses)
+	}
+	return d
+}
+
+func (s *server) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		noCache(s.static).ServeHTTP(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=30")
+	if err := s.tmpl.Execute(w, s.buildIndex(r)); err != nil {
+		log.Printf("render index: %v", err)
+	}
+}
+
+func (s *server) handleRobots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	fmt.Fprintf(w, `User-agent: *
+Allow: /
+
+# AI / answer engines (explicitly welcomed for GEO)
+User-agent: GPTBot
+Allow: /
+User-agent: OAI-SearchBot
+Allow: /
+User-agent: ChatGPT-User
+Allow: /
+User-agent: ClaudeBot
+Allow: /
+User-agent: PerplexityBot
+Allow: /
+User-agent: Google-Extended
+Allow: /
+User-agent: CCBot
+Allow: /
+
+Sitemap: %s/sitemap.xml
+`, s.cfg.SiteURL)
+}
+
+func (s *server) handleSitemap(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url><loc>%s/</loc><lastmod>%s</lastmod><changefreq>hourly</changefreq><priority>1.0</priority></url>
+</urlset>
+`, s.cfg.SiteURL, time.Now().UTC().Format("2006-01-02"))
+}
+
+func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	d := s.buildIndex(r)
+	fmt.Fprintf(w, "# FlashProxy Status\n\n")
+	fmt.Fprintf(w, "> Live uptime and latency for FlashProxy's proxy network, measured continuously by synthetic probes from multiple global vantage points (US and EU).\n\n")
+	fmt.Fprintf(w, "Current overall status: %s (%s).\n\n", d.OverallLabel, d.Updated)
+	fmt.Fprintf(w, "## Products monitored\n\n")
+	for _, p := range d.Products {
+		fmt.Fprintf(w, "- %s: %s, ~%dms median connect (best vantage: %s)\n", p.Name, p.StatusLabel, p.Median, p.Vantage)
+	}
+	fmt.Fprintf(w, "\n## What is measured\n\nPer product, per vantage: average and median connect latency (the time the proxy takes to establish the upstream connection), gateway ping RTT, throughput (streaming and large-object), high-frequency small-payload setup, broad scraping reachability, long-session stability, and a direct (no-proxy) baseline for comparison.\n\n")
+	fmt.Fprintf(w, "## Source\n\nThis status page is open source and fully reproducible: %s\n", "https://github.com/thealonlevi/flashproxy-sla")
 }
 
 func noCache(h http.Handler) http.Handler {

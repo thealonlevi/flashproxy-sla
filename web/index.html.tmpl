@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>FlashProxy Status — Live Proxy Uptime, Latency &amp; Throughput</title>
+  <meta name="description" content="Live operational status, uptime, and latency for FlashProxy proxy services — Shared ISP, Datacenter, IPv6 Datacenter, and IPv6 Residential — measured continuously from US and EU vantage points." />
+  <link rel="canonical" href="{{.SiteURL}}/" />
+  <meta name="robots" content="index,follow,max-image-preview:large" />
+  <meta name="theme-color" content="#0d1117" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="FlashProxy Status" />
+  <meta property="og:title" content="FlashProxy Status — Live Proxy Uptime &amp; Latency" />
+  <meta property="og:description" content="Live status, uptime, and latency for FlashProxy proxy services, measured continuously from US and EU vantage points." />
+  <meta property="og:url" content="{{.SiteURL}}/" />
+  <meta name="twitter:card" content="summary" />
+  <meta name="twitter:title" content="FlashProxy Status" />
+  <meta name="twitter:description" content="Live proxy uptime &amp; latency, measured from multiple regions." />
+  <link rel="stylesheet" href="style.css" />
+  <script type="application/ld+json">{{.JSONLD}}</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="head">
+      <div class="brand">flashproxy<span class="slash">/</span>status</div>
+      <div class="updated" id="updated">{{.Updated}}</div>
+    </header>
+
+    <section class="intro">
+      <h1>FlashProxy Status</h1>
+      <p>Live uptime and latency for the FlashProxy proxy network — Shared ISP (USA &amp; EU), Datacenter, IPv6 Datacenter, and IPv6 Residential proxies. Every number on this page is recorded by an open-source prober that measures each product continuously from multiple global vantage points.</p>
+    </section>
+
+    <div class="banner" id="banner" data-status="{{.OverallStatus}}">
+      <span class="dot"></span>
+      <span class="banner-text" id="banner-text">{{.OverallLabel}}</span>
+    </div>
+
+    <section class="components" id="components">
+      {{range .Products}}
+      <div class="comp">
+        <div class="comp-top"><span class="comp-name">{{.Name}}</span><span class="comp-stat" data-status="{{.Status}}">{{.StatusLabel}}</span></div>
+        <div class="metric"><span class="big">{{.Median}}</span><span class="unit">ms median connect · via {{.Vantage}}</span></div>
+      </div>
+      {{end}}
+    </section>
+
+    <div class="legend">
+      <span><i class="sw" data-status="operational"></i> operational</span>
+      <span><i class="sw" data-status="degraded"></i> degraded</span>
+      <span><i class="sw" data-status="down"></i> down</span>
+      <span><i class="sw" data-status="no_data"></i> no data</span>
+    </div>
+
+    <section class="metrics">
+      <div class="metrics-head">
+        <span id="metrics-title">gateway ping vs proxy connect — select a component</span>
+        <span class="ranges" id="ranges">
+          <button data-min="60" class="active">60m</button>
+          <button data-min="360">6h</button>
+          <button data-min="1440">24h</button>
+        </span>
+      </div>
+      <svg id="chart" viewBox="0 0 880 220" preserveAspectRatio="none" role="img"></svg>
+      <div class="chart-legend" id="chart-legend">&nbsp;</div>
+      <div class="scn-head">archetype scenarios <span class="muted">· last 10m · via proxy vs direct baseline</span></div>
+      <div id="scenarios" class="scenarios-grid"></div>
+    </section>
+
+    <section class="metrics" id="public-access">
+      <div class="metrics-head"><span>public read-only data access</span></div>
+      <div id="public-box" class="public-box">loading…</div>
+    </section>
+
+    <section class="about">
+      <h2>About FlashProxy</h2>
+      <p>FlashProxy provides high-performance HTTP and SOCKS5 proxies with Shared ISP, Datacenter, IPv6 Datacenter, and IPv6 Residential IP options. This page reports the real-time health of that network.</p>
+      <h2>What this page measures</h2>
+      <p>For each product and vantage, the prober measures proxy connect latency (the time the proxy takes to establish the upstream connection, <code>CONNECT</code> → <code>200</code>), gateway ping (ICMP round-trip time), throughput on streaming and large-object downloads, high-frequency small-payload connection setup, broad scraping reachability across many destinations, long-session stability, and a direct no-proxy baseline — so the proxy's overhead over the raw network is visible at a glance.</p>
+    </section>
+
+    <section class="faq">
+      <h2>Frequently asked questions</h2>
+      <h3>Is FlashProxy up right now?</h3>
+      <p>Overall status is <strong>{{.OverallLabel}}</strong> as of {{.Updated}}. Per-product status is listed above and refreshes live in your browser.</p>
+      <h3>What proxy products does FlashProxy offer?</h3>
+      <p>Shared ISP proxies (USA and EU), Datacenter proxies, IPv6 Datacenter proxies, and IPv6 Residential proxies — all over HTTP and SOCKS5.</p>
+      <h3>How is uptime and latency measured?</h3>
+      <p>Synthetic probes run continuously from US (Ashburn) and EU (Frankfurt) vantage points, measuring connect latency, gateway ping, throughput, success rate, and a direct no-proxy baseline for every product. The methodology and code are open source and fully reproducible.</p>
+    </section>
+
+    <footer class="foot">
+      synthetic probes · every value on this page was recorded by this open-source app ·
+      <a href="https://github.com/thealonlevi/flashproxy-sla">source</a>
+    </footer>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

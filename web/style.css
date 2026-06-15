@@ -163,3 +163,12 @@ html, body {
 /* proxy-vs-direct rows in scenario cards */
 .scn-direct { font-size: 11px; color: var(--muted); margin-top: 2px; }
 .scn-delta { font-size: 11px; color: var(--ink); font-weight: 600; margin-top: 1px; }
+
+/* SEO/GEO prose sections */
+.intro { margin: 18px 0 4px; }
+.intro h1 { font-size: 20px; margin: 0 0 6px; }
+.intro p, .about p, .faq p { color: var(--muted); font-size: 13px; line-height: 1.6; max-width: 72ch; }
+.about, .faq { margin-top: 30px; border-top: 1px solid var(--line); padding-top: 14px; }
+.about h2, .faq h2 { font-size: 15px; margin: 14px 0 6px; color: var(--ink); }
+.faq h3 { font-size: 13px; margin: 14px 0 2px; color: var(--ink); }
+.about code { background: #f0f1ee; padding: 0 3px; border-radius: 2px; }
