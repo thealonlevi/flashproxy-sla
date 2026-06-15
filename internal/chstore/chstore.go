@@ -2,8 +2,10 @@
 // It is the reference implementation of the storage backend; the same surface can be
 // implemented for Postgres or SQLite so open-source adopters can swap stores.
 //
-// Every request pins session_timezone=UTC so the naive DateTime('UTC') values we
-// write are interpreted identically regardless of the server's local timezone.
+// Timezone correctness relies on the ClickHouse SERVER being configured UTC
+// (<timezone>UTC</timezone>; see deploy/clickhouse-deploy-prompt.md), NOT on a
+// per-query session_timezone override — reader users are readonly=1, which rejects
+// any client-set setting (Code 164), so the client must not send settings on reads.
 package chstore
 
 import (
@@ -50,7 +52,6 @@ func New(base, db, user, pass string) *Client {
 func (c *Client) exec(ctx context.Context, query string, body io.Reader, extra url.Values) ([]byte, error) {
 	v := url.Values{}
 	v.Set("query", query)
-	v.Set("session_timezone", "UTC")
 	for k, vals := range extra {
 		for _, val := range vals {
 			v.Add(k, val)
@@ -234,10 +235,11 @@ func (c *Client) LedgerHeads(ctx context.Context) (map[string]struct {
 }
 
 // QueryJSON runs a SELECT and returns the rows of the ClickHouse JSON format.
+// No client-set settings are sent: reader users are readonly=1, so query caps and
+// cancel_http_readonly_queries_on_client_close are configured server-side on the
+// reader profiles instead (see schema/roles.sql).
 func (c *Client) QueryJSON(ctx context.Context, sql string) ([]map[string]any, error) {
-	extra := url.Values{}
-	extra.Set("cancel_http_readonly_queries_on_client_close", "1")
-	b, err := c.exec(ctx, sql+" FORMAT JSON", nil, extra)
+	b, err := c.exec(ctx, sql+" FORMAT JSON", nil, nil)
 	if err != nil {
 		return nil, err
 	}
