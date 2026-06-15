@@ -1,11 +1,11 @@
-# Built binaries
+# Built binaries (root-anchored so they don't match cmd/origin, cmd/worker, etc.)
 /bin/
 /out/
-origin
-collector
-prober
-worker
-website
+/origin
+/collector
+/prober
+/worker
+/website
 
 # Real (non-example) configs — secrets / live endpoints.
 # Only *.example.json is committed.

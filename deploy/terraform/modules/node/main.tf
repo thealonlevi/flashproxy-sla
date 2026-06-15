@@ -82,7 +82,6 @@ resource "aws_instance" "this" {
   instance_type          = var.instance_type
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
-  ipv6_address_count     = 1 # dual-stack so ipv6 packages can egress v6 to the origin
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     repo_url            = var.repo_url
