@@ -114,6 +114,44 @@ func TestUptimeHalfWeight(t *testing.T) {
 	}
 }
 
+// TestCrossVantageDownRequiresAll: a package is Down only when EVERY vantage is
+// down; if any vantage is available, the package is not Down.
+func TestCrossVantageDownRequiresAll(t *testing.T) {
+	now := int64(1_700_000_000)
+	now -= now % 60
+	grid := make([]int64, 8)
+	for i := range grid {
+		grid[i] = now - int64(7-i)*60
+	}
+	bv := map[string]map[int64]Minute{"us": {}, "eu": {}}
+	for _, tt := range grid {
+		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 0, Samples: 10}  // down
+		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 30, SuccessPct: 100, Samples: 10} // up
+	}
+	pr := rollupPackageSeries(bv, grid, now+10, testSLO)
+	if pr.Status != "operational" {
+		t.Fatalf("one vantage down, one up -> package must NOT be down; got %s", pr.Status)
+	}
+	if pr.BestVantage != "eu" {
+		t.Fatalf("best available vantage should be eu, got %q", pr.BestVantage)
+	}
+	if pr.UptimePct != 100 {
+		t.Fatalf("with one vantage always up, uptime should be 100, got %v", pr.UptimePct)
+	}
+
+	// Now BOTH vantages down at every minute -> package Down, uptime 0.
+	for _, tt := range grid {
+		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 0, Samples: 10}
+	}
+	pr = rollupPackageSeries(bv, grid, now+10, testSLO)
+	if pr.Status != "down" {
+		t.Fatalf("all vantages down -> package must be down; got %s", pr.Status)
+	}
+	if pr.UptimePct != 0 {
+		t.Fatalf("all-down uptime should be 0, got %v", pr.UptimePct)
+	}
+}
+
 func TestOverallWorstWins(t *testing.T) {
 	if s, _ := Overall([]string{"operational", "degraded", "operational"}); s != "degraded" {
 		t.Fatalf("got %s", s)

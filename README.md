@@ -71,7 +71,7 @@ timing (no ICMP/raw sockets), so it works unprivileged in the distroless image.
 contract can't drift:
 
 - **Available** — the `connect` scenario succeeds.
-- **Down** — a minute whose connect success rate is below the threshold (`down_success_pct`, default 90).
+- **Down** — a minute that is below the success threshold (`down_success_pct`, default 90) **from every vantage simultaneously**. A single-vantage failure is **not** Down (it isolates one network path, not the proxy).
 - **Degraded** — Available, but the **best vantage's average connect latency exceeds 50 ms for 5 consecutive minutes** (and stays Degraded until it recovers). The run-up minutes before the trigger are not yet Degraded.
 - **Availability%** = (minutes with data − Down − ½·Degraded) / minutes with data × 100.
 

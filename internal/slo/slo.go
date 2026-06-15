@@ -287,47 +287,125 @@ func FetchByVantage(ctx context.Context, ch *chstore.Client, db string, s SLO) (
 	return out, nil
 }
 
-// Fetch returns the current status per package, judged from its BEST vantage (lowest
-// recent average connect-ms among vantages with data) — matching the SLA's
-// "best vantage" rule. Used by the monitor.
-func Fetch(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status, error) {
-	byVantage, err := FetchByVantage(ctx, ch, db, s)
+// PackageRollup is the CROSS-VANTAGE rollup for one package. A minute is Down only
+// when the package is unavailable from EVERY vantage at once — a failure from a
+// single vantage (e.g. one region's network path) is NOT Down. Degraded uses the
+// best (lowest-latency) currently-available vantage's average, per the SLA.
+type PackageRollup struct {
+	Package      string
+	Status       string
+	BestVantage  string
+	ConnectMsAvg float64
+	SuccessPct   float64
+	Samples      float64
+	AgeSeconds   int64
+	UptimePct    float64
+	Bars         []Bar
+	Vantages     []VantageRollup
+}
+
+// rollupPackageSeries reduces all vantages of one package to a single cross-vantage
+// minute series — available-anywhere ⇒ up (success 100), unavailable-everywhere ⇒
+// down (success 0), with the best available vantage's avg driving Degraded — then
+// classifies it with the consecutive rule. Per-vantage detail is kept for the UI.
+func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, now int64, s SLO) PackageRollup {
+	s = s.withDefaults()
+	vans := make([]string, 0, len(byVantage))
+	for v := range byVantage {
+		vans = append(vans, v)
+	}
+	sort.Strings(vans)
+
+	detail := make([]VantageRollup, 0, len(vans))
+	for _, v := range vans {
+		vr := rollupSeries(byVantage[v], grid, now, s)
+		vr.Vantage = v
+		vr.Current.Package, vr.Current.Vantage = "", v
+		detail = append(detail, vr)
+	}
+
+	// Collapse vantages to one synthetic per-minute series.
+	synth := make(map[int64]Minute, len(grid))
+	bestVanAt := make(map[int64]string, len(grid))
+	for _, t := range grid {
+		var hasData, availAny bool
+		var bestAvg, samples float64
+		bestVan := ""
+		for _, v := range vans {
+			m, ok := byVantage[v][t]
+			if !ok {
+				continue
+			}
+			hasData = true
+			samples += m.Samples
+			if m.SuccessPct >= s.DownSuccessPct { // this vantage is available this minute
+				if !availAny || m.ConnectMsAvg < bestAvg {
+					bestAvg, bestVan = m.ConnectMsAvg, v
+				}
+				availAny = true
+			}
+		}
+		if !hasData {
+			continue
+		}
+		succ := 0.0
+		if availAny {
+			succ = 100
+		}
+		synth[t] = Minute{T: t, ConnectMsAvg: bestAvg, SuccessPct: succ, Samples: samples}
+		bestVanAt[t] = bestVan
+	}
+
+	cross := rollupSeries(synth, grid, now, s)
+	bestVan := ""
+	for _, t := range grid { // best vantage at the most recent data minute (headline)
+		if _, ok := synth[t]; ok {
+			bestVan = bestVanAt[t]
+		}
+	}
+	return PackageRollup{
+		Status: cross.Current.Status, BestVantage: bestVan,
+		ConnectMsAvg: cross.Current.ConnectMsAvg, SuccessPct: cross.Current.SuccessPct,
+		Samples: cross.Current.Samples, AgeSeconds: cross.Current.AgeSeconds,
+		UptimePct: cross.UptimePct, Bars: cross.Bars, Vantages: detail,
+	}
+}
+
+// RollupPackages returns the cross-vantage rollup per package (sorted). This is the
+// authoritative status/uptime used by the banner, the monitor, and SLA accounting.
+func RollupPackages(ctx context.Context, ch *chstore.Client, db string, windowMin int, s SLO) ([]PackageRollup, error) {
+	s = s.withDefaults()
+	data, err := fetchMinutes(ctx, ch, db, windowMin)
 	if err != nil {
 		return nil, err
 	}
-	best := map[string]Status{}
-	order := []string{}
-	for _, v := range byVantage {
-		cur, ok := best[v.Package]
-		if !ok {
-			order = append(order, v.Package)
-			best[v.Package] = v
-			continue
-		}
-		if betterVantage(v, cur) {
-			best[v.Package] = v
-		}
-	}
-	sort.Strings(order)
-	out := make([]Status, 0, len(order))
-	for _, p := range order {
-		st := best[p]
-		st.Vantage = "" // package-level rollup
-		out = append(out, st)
+	now := time.Now()
+	grid := Grid(now, windowMin)
+	out := make([]PackageRollup, 0, len(data))
+	for _, pkg := range sortedKeys(data) {
+		pr := rollupPackageSeries(data[pkg], grid, now.Unix(), s)
+		pr.Package = pkg
+		out = append(out, pr)
 	}
 	return out, nil
 }
 
-// betterVantage: real data beats no_data, then lower avg connect, then higher success.
-func betterVantage(a, b Status) bool {
-	aData, bData := a.Status != "no_data", b.Status != "no_data"
-	if aData != bData {
-		return aData
+// Fetch returns the current cross-vantage status per package (Down only when ALL
+// vantages are down). Used by the monitor.
+func Fetch(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status, error) {
+	prs, err := RollupPackages(ctx, ch, db, s.withDefaults().DegradedForMin+5, s)
+	if err != nil {
+		return nil, err
 	}
-	if a.ConnectMsAvg != b.ConnectMsAvg {
-		return a.ConnectMsAvg < b.ConnectMsAvg
+	out := make([]Status, 0, len(prs))
+	for _, pr := range prs {
+		out = append(out, Status{
+			Package: pr.Package, Vantage: pr.BestVantage, Status: pr.Status,
+			ConnectMsAvg: pr.ConnectMsAvg, SuccessPct: pr.SuccessPct,
+			Samples: pr.Samples, AgeSeconds: pr.AgeSeconds,
+		})
 	}
-	return a.SuccessPct > b.SuccessPct
+	return out, nil
 }
 
 func sortedKeys[V any](m map[string]V) []string {

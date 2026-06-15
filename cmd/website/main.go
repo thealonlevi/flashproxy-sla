@@ -19,7 +19,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -205,56 +204,34 @@ type vantageView struct {
 	Bars         []slo.Bar `json:"bars"`
 }
 
-// betterRollup reports whether a should be preferred as default over b: real data
-// beats no_data, then lowest avg connect, then highest success, then most samples.
-func betterRollup(a, b slo.VantageRollup) bool {
-	aData, bData := a.Current.Status != "no_data", b.Current.Status != "no_data"
-	if aData != bData {
-		return aData
-	}
-	if a.Current.ConnectMsAvg != b.Current.ConnectMsAvg {
-		return a.Current.ConnectMsAvg < b.Current.ConnectMsAvg
-	}
-	if a.Current.SuccessPct != b.Current.SuccessPct {
-		return a.Current.SuccessPct > b.Current.SuccessPct
-	}
-	return a.Current.Samples > b.Current.Samples
-}
-
 func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	const windowMin = 90
-	rollups, pkgs, err := slo.Rollup(r.Context(), s.ch, s.cfg.ClickHouse.DB, windowMin, s.cfg.SLO)
+	// Cross-vantage rollup: a package is Down only when ALL vantages are down. The
+	// bars/status/uptime are the package-level (cross-vantage) values; per-vantage
+	// detail is still returned for the UI toggle.
+	prs, err := slo.RollupPackages(r.Context(), s.ch, s.cfg.ClickHouse.DB, windowMin, s.cfg.SLO)
 	if err != nil {
 		s.fail(w, "overview query", err)
 		return
 	}
-	comps := make([]component, 0, len(pkgs))
-	statuses := make([]string, 0, len(pkgs))
-	for _, pkg := range pkgs {
-		vrs := rollups[pkg]
-		if len(vrs) == 0 {
-			continue
-		}
-		views := make([]vantageView, len(vrs))
-		best := 0
-		for i, vr := range vrs {
+	comps := make([]component, 0, len(prs))
+	statuses := make([]string, 0, len(prs))
+	for _, pr := range prs {
+		views := make([]vantageView, len(pr.Vantages))
+		for i, vr := range pr.Vantages {
 			views[i] = vantageView{
 				Vantage: vr.Vantage, Status: vr.Current.Status,
 				ConnectMsAvg: vr.Current.ConnectMsAvg, SuccessPct: vr.Current.SuccessPct,
 				Samples: vr.Current.Samples, AgeSeconds: vr.Current.AgeSeconds,
 				UptimePct: vr.UptimePct, Bars: vr.Bars,
 			}
-			if betterRollup(vr, vrs[best]) {
-				best = i
-			}
 		}
-		b := vrs[best]
 		comps = append(comps, component{
-			Package: pkg, Status: b.Current.Status, DefaultVantage: b.Vantage,
-			ConnectMsAvg: b.Current.ConnectMsAvg, SuccessPct: b.Current.SuccessPct,
-			Samples: b.Current.Samples, UptimePct: b.UptimePct, Bars: b.Bars, Vantages: views,
+			Package: pr.Package, Status: pr.Status, DefaultVantage: pr.BestVantage,
+			ConnectMsAvg: pr.ConnectMsAvg, SuccessPct: pr.SuccessPct,
+			Samples: pr.Samples, UptimePct: pr.UptimePct, Bars: pr.Bars, Vantages: views,
 		})
-		statuses = append(statuses, b.Current.Status)
+		statuses = append(statuses, pr.Status)
 	}
 	status, label := slo.Overall(statuses)
 	writeJSON(w, map[string]any{
@@ -445,41 +422,18 @@ const slaJSONLD = `[
 // buildIndex computes a current snapshot (best vantage per product) for SSR.
 func (s *server) buildIndex(r *http.Request) idxData {
 	d := idxData{SiteURL: s.cfg.SiteURL, OverallStatus: "no_data", OverallLabel: "Awaiting Data", Updated: "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"), JSONLD: template.JS(jsonLD)}
-	cur, err := slo.FetchByVantage(r.Context(), s.ch, s.cfg.ClickHouse.DB, s.cfg.SLO)
+	prs, err := slo.RollupPackages(r.Context(), s.ch, s.cfg.ClickHouse.DB, 15, s.cfg.SLO)
 	if err != nil {
 		log.Printf("buildIndex: %v", err)
 		return d
 	}
-	type best struct {
-		st  slo.Status
-		set bool
-	}
-	byPkg := map[string]*best{}
-	order := []string{}
-	for _, st := range cur {
-		b := byPkg[st.Package]
-		if b == nil {
-			b = &best{}
-			byPkg[st.Package] = b
-			order = append(order, st.Package)
-		}
-		better := !b.set ||
-			(st.Status != "no_data" && b.st.Status == "no_data") ||
-			(st.Status != "no_data" && b.st.Status != "no_data" && st.ConnectMsAvg < b.st.ConnectMsAvg)
-		if better {
-			b.st = st
-			b.set = true
-		}
-	}
-	sort.Strings(order)
 	statuses := []string{}
-	for _, pkg := range order {
-		st := byPkg[pkg].st
+	for _, pr := range prs {
 		d.Products = append(d.Products, idxProduct{
-			Name: pkg, Status: st.Status, StatusLabel: statusLabel[st.Status],
-			AvgMs: int(st.ConnectMsAvg + 0.5), Vantage: strings.TrimPrefix(st.Vantage, "aws-"),
+			Name: pr.Package, Status: pr.Status, StatusLabel: statusLabel[pr.Status],
+			AvgMs: int(pr.ConnectMsAvg + 0.5), Vantage: strings.TrimPrefix(pr.BestVantage, "aws-"),
 		})
-		statuses = append(statuses, st.Status)
+		statuses = append(statuses, pr.Status)
 	}
 	if len(statuses) > 0 {
 		d.OverallStatus, d.OverallLabel = slo.Overall(statuses)
