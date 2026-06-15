@@ -37,6 +37,19 @@ variable "ch_website_password" {
   sensitive = true
   default   = ""
 }
+# Optional origin TLS for the website (:443). If empty, user-data generates a
+# self-signed cert (works with Cloudflare SSL mode "Full"; for "Full (strict)"
+# supply a Cloudflare Origin Certificate here).
+variable "tls_cert" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "tls_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
 variable "proxy_urls" {
   type      = map(string)
   sensitive = true

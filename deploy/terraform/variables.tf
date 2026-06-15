@@ -41,6 +41,20 @@ variable "ch_website_password" {
   sensitive = true
 }
 
+# Optional origin TLS for the website. Leave empty to use a self-signed cert
+# (Cloudflare SSL mode "Full"). For "Full (strict)", paste a Cloudflare Origin
+# Certificate + key here (via TF_VAR_tls_cert / TF_VAR_tls_key or tfvars).
+variable "tls_cert" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "tls_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+
 # The 5 proxy plans the workers probe (user:pass@host:port). Sensitive.
 variable "proxy_urls" {
   description = "package -> http://user:pass@host:port"

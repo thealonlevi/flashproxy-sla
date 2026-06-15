@@ -21,6 +21,8 @@ module "ashburn" {
   ch_url              = var.ch_url
   ch_worker_password  = var.ch_worker_password
   ch_website_password = var.ch_website_password
+  tls_cert            = var.tls_cert
+  tls_key             = var.tls_key
   proxy_urls          = var.proxy_urls
 }
 

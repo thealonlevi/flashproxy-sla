@@ -40,6 +40,8 @@ type publicCH struct {
 type Config struct {
 	Listen           string   `json:"listen"`
 	WebDir           string   `json:"web_dir"`
+	TLSCertFile      string   `json:"tls_cert_file"`
+	TLSKeyFile       string   `json:"tls_key_file"`
 	ClickHouse       chConn   `json:"clickhouse"`
 	PublicClickHouse publicCH `json:"public_clickhouse"`
 	SLO              slo.SLO  `json:"slo"`
@@ -68,6 +70,10 @@ func main() {
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "ok") })
 	mux.Handle("/", noCache(http.FileServer(http.Dir(cfg.WebDir))))
 
+	if cfg.TLSCertFile != "" && cfg.TLSKeyFile != "" {
+		log.Printf("website (read-only, TLS) listening on %s as ch-user=%q", cfg.Listen, cfg.ClickHouse.User)
+		log.Fatal(http.ListenAndServeTLS(cfg.Listen, cfg.TLSCertFile, cfg.TLSKeyFile, mux))
+	}
 	log.Printf("website (read-only) listening on %s as ch-user=%q", cfg.Listen, cfg.ClickHouse.User)
 	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
 }

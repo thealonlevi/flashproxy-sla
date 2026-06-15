@@ -46,9 +46,20 @@ resource "aws_security_group" "this" {
   dynamic "ingress" {
     for_each = var.run_website ? [1] : []
     content {
-      description = "status page (front with Cloudflare)"
+      description = "status page HTTP (front with Cloudflare)"
       from_port   = 80
       to_port     = 80
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+    }
+  }
+
+  dynamic "ingress" {
+    for_each = var.run_website ? [1] : []
+    content {
+      description = "status page HTTPS (Cloudflare Full mode connects here)"
+      from_port   = 443
+      to_port     = 443
       protocol    = "tcp"
       cidr_blocks = ["0.0.0.0/0"]
     }
@@ -83,6 +94,10 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   vpc_security_group_ids = [aws_security_group.this.id]
 
+  # Don't recreate a running instance just because user-data text changed
+  # (we reconcile in place); only a deliberate -replace rebuilds it.
+  user_data_replace_on_change = false
+
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
     repo_url            = var.repo_url
     git_ref             = var.git_ref
@@ -94,6 +109,8 @@ resource "aws_instance" "this" {
     ch_url              = var.ch_url
     ch_worker_password  = var.ch_worker_password
     ch_website_password = var.ch_website_password
+    tls_cert            = var.tls_cert
+    tls_key             = var.tls_key
     targets_json        = jsonencode(local.targets)
   })
 
