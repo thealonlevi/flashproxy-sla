@@ -6,6 +6,11 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y git ca-certificates curl iputils-ping
 
+# Use Cloudflare's resolver for all DNS (the workers resolve destination hostnames).
+mkdir -p /etc/systemd/resolved.conf.d
+printf '[Resolve]\nDNS=1.1.1.1 1.0.0.1 2606:4700:4700::1111 2606:4700:4700::1001\nDomains=~.\n' >/etc/systemd/resolved.conf.d/cloudflare.conf
+systemctl restart systemd-resolved || true
+
 # Go toolchain. cloud-init runs as root with no $HOME, so Go has nowhere for its
 # build cache — set HOME/GOCACHE explicitly.
 curl -fsSL https://go.dev/dl/go1.25.0.linux-${go_arch}.tar.gz | tar -C /usr/local -xz
