@@ -104,14 +104,19 @@ function selectComponent(pkg) {
 async function loadSeries() {
   if (!selected) return;
   const v = vantageSel[selected] || "";
-  document.getElementById("metrics-title").textContent = `connect latency · ${selected} · via ${shortV(v)}`;
+  document.getElementById("metrics-title").textContent = `gateway ping vs proxy connect · ${selected} · via ${shortV(v)}`;
   let d;
   try {
     d = await (await fetch(`api/series?package=${encodeURIComponent(selected)}&minutes=${curMin}&vantage=${encodeURIComponent(v)}`)).json();
   } catch (e) { return; }
-  drawChart(d.points || []);
+  drawChart(d.series || {});
   loadScenarios(selected, v);
 }
+
+const SERIES_STYLE = {
+  connect: { label: "proxy connect", color: "#2f9e44" },
+  ping: { label: "gateway ping", color: "#3b82f6" },
+};
 
 const SCN_ORDER = ["ping", "connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
 const SCN_LABEL = {
@@ -158,22 +163,28 @@ async function loadScenarios(pkg, vantage) {
   }).join("");
 }
 
-function drawChart(points) {
+function drawChart(series) {
   const svg = document.getElementById("chart");
   const W = 880, H = 220, pad = 38;
-  if (!points.length) {
+  const names = Object.keys(series).filter((n) => series[n] && series[n].length);
+  if (!names.length) {
     svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" fill="#9aa195" text-anchor="middle" font-size="12">no data yet</text>`;
     document.getElementById("chart-legend").innerHTML = "&nbsp;";
     return;
   }
-  const xs = points.map((p) => +p.t);
-  const ys = points.map((p) => +p.median);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const maxY = Math.max(10, Math.ceil(Math.max(...ys) * 1.25));
+  const allT = [], allY = [];
+  names.forEach((n) => series[n].forEach((p) => { allT.push(+p.t); allY.push(+p.median); }));
+  const minX = Math.min(...allT), maxX = Math.max(...allT);
+  const maxY = Math.max(10, Math.ceil(Math.max(...allY) * 1.25));
   const X = (t) => pad + (maxX === minX ? 0 : (t - minX) / (maxX - minX)) * (W - 2 * pad);
   const Y = (v) => H - pad - (v / maxY) * (H - 2 * pad);
-  const line = points.map((p, i) => (i ? "L" : "M") + X(+p.t).toFixed(1) + " " + Y(+p.median).toFixed(1)).join(" ");
   const mid = maxY / 2;
+
+  const paths = names.map((n) => {
+    const color = (SERIES_STYLE[n] || {}).color || "#888";
+    const line = series[n].map((p, i) => (i ? "L" : "M") + X(+p.t).toFixed(1) + " " + Y(+p.median).toFixed(1)).join(" ");
+    return `<path d="${line}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+  }).join("");
 
   svg.innerHTML =
     `<line x1="${pad}" y1="${Y(0)}" x2="${W - pad}" y2="${Y(0)}" stroke="#d7dcd2"/>` +
@@ -182,11 +193,15 @@ function drawChart(points) {
     `<text x="6" y="${Y(maxY) + 4}" fill="#9aa195" font-size="10">${maxY}ms</text>` +
     `<text x="6" y="${Y(mid) + 4}" fill="#9aa195" font-size="10">${Math.round(mid)}</text>` +
     `<text x="6" y="${Y(0) + 4}" fill="#9aa195" font-size="10">0</text>` +
-    `<path d="${line}" fill="none" stroke="#2f9e44" stroke-width="1.5"/>`;
+    paths;
 
-  const last = points[points.length - 1];
-  document.getElementById("chart-legend").textContent =
-    `median connect-ms · ${points.length} × 1-min buckets · latest ${Math.round(+last.median)}ms`;
+  // legend: colored swatch + latest value per series
+  document.getElementById("chart-legend").innerHTML = names.map((n) => {
+    const st = SERIES_STYLE[n] || { label: n, color: "#888" };
+    const pts = series[n];
+    const last = pts[pts.length - 1];
+    return `<span style="color:${st.color}">■</span> ${st.label} <b>${Math.round(+last.median)}ms</b>`;
+  }).join(" &nbsp;&nbsp; ");
 }
 
 async function loadMeta() {

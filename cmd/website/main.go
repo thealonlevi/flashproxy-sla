@@ -295,20 +295,24 @@ func (s *server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		}
 		vantageFilter = fmt.Sprintf(" AND vantage = '%s'", v)
 	}
-	sql := fmt.Sprintf(`SELECT toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
-  round(quantile(0.5)(connect_ms), 1)  AS median,
-  round(avg(connect_ms), 1)            AS avg,
-  round(quantile(0.95)(connect_ms), 1) AS p95,
-  round(100 * sum(success) / count(), 2) AS success_pct
+	// gateway ping vs proxy connect, as separate time series
+	sql := fmt.Sprintf(`SELECT scenario,
+  toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
+  round(quantile(0.5)(connect_ms), 1) AS median
 FROM %s.probe_raw
-WHERE scenario = 'connect' AND package = '%s'%s AND ts > now() - INTERVAL %d MINUTE
-GROUP BY t ORDER BY t`, s.cfg.ClickHouse.DB, pkg, vantageFilter, mins)
+WHERE scenario IN ('connect', 'ping') AND package = '%s'%s AND ts > now() - INTERVAL %d MINUTE
+GROUP BY scenario, t ORDER BY scenario, t`, s.cfg.ClickHouse.DB, pkg, vantageFilter, mins)
 	rows, err := s.ch.QueryJSON(r.Context(), sql)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, map[string]any{"package": pkg, "minutes": mins, "points": rows})
+	series := map[string][]map[string]any{}
+	for _, m := range rows {
+		sc := chstore.Str(m, "scenario")
+		series[sc] = append(series[sc], map[string]any{"t": chstore.Num(m, "t"), "median": chstore.Num(m, "median")})
+	}
+	writeJSON(w, map[string]any{"package": pkg, "minutes": mins, "series": series})
 }
 
 // handleScenarios returns per-archetype-scenario stats for one package (optionally
