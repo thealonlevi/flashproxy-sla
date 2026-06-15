@@ -1,17 +1,30 @@
 -- Roles, settings profiles, and users for flashproxy-status.
 -- Run ONCE by an admin after schema/clickhouse.sql is loaded. Passwords are
--- ${ENV} placeholders — substitute at bootstrap (see deploy/bootstrap-roles.sh)
--- or replace for a self-hosted instance.
+-- ${ENV} placeholders — substitute at bootstrap (see deploy/bootstrap-roles.sh,
+-- which keeps plaintext out of shell history and out of query_log).
 --
 -- Three users, two roles:
---   sla_reader  -> SELECT on sla.*
+--   sla_reader  -> SELECT on sla.* (incl. the integrity ledger)
 --   sla_writer  -> SELECT + INSERT on sla.*
---   flashproxy-status-public  (reader, 500 concurrent queries) -- PUBLISHED on the site
---   flashproxy-status-website (reader,  50 concurrent queries) -- the site renders with this
---   flashproxy-status-worker  (writer)                         -- prober VMs push results
+--   flashproxy-status-public  (reader, capped) -- PUBLISHED on the site
+--   flashproxy-status-website (reader, capped) -- the site renders with this
+--   flashproxy-status-worker  (writer)         -- prober VMs push results + ledger
 --
--- ClickHouse caps concurrent QUERIES per user (max_concurrent_queries_for_user),
--- which is the practical equivalent of a per-user connection limit.
+-- IMPORTANT — system-table exposure: readonly=1 only blocks writes/DDL, NOT
+-- SELECTs from the `system` database. Since `flashproxy-status-public` is
+-- published to the internet, you MUST also forbid it (and the website user) from
+-- reading system tables, or it can read query_log (other users' queries) and
+-- potentially user password hashes. Do that BOTH by config and by grant:
+--
+--   In config.xml (server-wide, the robust fix):
+--     <access_control_improvements>
+--       <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
+--       <select_from_information_schema_requires_grant>true</select_from_information_schema_requires_grant>
+--     </access_control_improvements>
+--   plus a query_masking_rule that redacts  IDENTIFIED ... BY '...'  from logs.
+--
+-- The grants below scope the published users to sla.* only and never grant
+-- system/INFORMATION_SCHEMA, so with the config flags above they cannot read it.
 
 -- ---- roles ----
 CREATE ROLE IF NOT EXISTS sla_reader;
@@ -21,17 +34,30 @@ CREATE ROLE IF NOT EXISTS sla_writer;
 GRANT SELECT, INSERT ON sla.* TO sla_writer;
 
 -- ---- settings profiles ----
+-- Public profile is internet-reachable, so it is bounded on EVERY axis: rows,
+-- bytes, memory (per query AND per user), execution time, and concurrency. Row
+-- caps alone do not bound a cross-join / numbers() / groupArray memory bomb.
 CREATE SETTINGS PROFILE IF NOT EXISTS sla_public SETTINGS
-    max_concurrent_queries_for_user = 500,
     readonly = 1,
-    max_execution_time = 15,
+    allow_ddl = 0,
+    allow_introspection_functions = 0,
+    max_concurrent_queries_for_user = 50,
+    max_execution_time = 5,
+    max_rows_to_read = 100000000,
+    max_bytes_to_read = 2000000000,
     max_result_rows = 1000000,
-    max_rows_to_read = 500000000;
+    max_memory_usage = 2000000000,
+    max_memory_usage_for_user = 4000000000,
+    cancel_http_readonly_queries_on_client_close = 1;
 
 CREATE SETTINGS PROFILE IF NOT EXISTS sla_website SETTINGS
-    max_concurrent_queries_for_user = 50,
     readonly = 1,
-    max_execution_time = 30;
+    allow_ddl = 0,
+    allow_introspection_functions = 0,
+    max_concurrent_queries_for_user = 50,
+    max_execution_time = 30,
+    max_memory_usage = 4000000000,
+    cancel_http_readonly_queries_on_client_close = 1;
 
 CREATE SETTINGS PROFILE IF NOT EXISTS sla_worker SETTINGS
     max_concurrent_queries_for_user = 200;

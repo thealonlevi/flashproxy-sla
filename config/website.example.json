@@ -4,6 +4,7 @@
   "site_url": "https://status.flashproxy.com",
   "tls_cert_file": "",
   "tls_key_file": "",
+  "ledger_pubkey": "${LEDGER_PUBKEY}",
   "clickhouse": {
     "url": "http://127.0.0.1:18123",
     "db": "sla",
@@ -15,13 +16,12 @@
     "db": "sla",
     "user": "flashproxy-status-public",
     "password": "${SLA_PUBLIC_PASSWORD}",
-    "note": "Read-only, capped at 500 concurrent queries. Published so anyone can reproduce this dashboard from the same data."
+    "note": "Read-only, resource-capped. Published so anyone can reproduce this dashboard and verify the integrity ledger (see /api/meta)."
   },
   "slo": {
-    "connect_ms_median_warn": 120,
-    "connect_ms_median_crit": 400,
-    "success_pct_warn": 98.0,
-    "success_pct_crit": 90.0,
+    "degraded_avg_ms": 50,
+    "degraded_for_min": 5,
+    "down_success_pct": 90,
     "stale_seconds": 120
   }
 }

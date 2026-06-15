@@ -3,6 +3,9 @@
   "timeout_ms": 8000,
   "monitor": true,
   "discord_webhook": "${DISCORD_WEBHOOK}",
+  "checkpoint_every_sec": 300,
+  "monitor_debounce_n": 2,
+  "ledger_signing_key": "${LEDGER_SIGNING_KEY}",
   "clickhouse": {
     "url": "http://127.0.0.1:18123",
     "db": "sla",
@@ -17,7 +20,7 @@
     "www.wikipedia.org:443", "www.microsoft.com:443"
   ],
   "scenarios": {
-    "ping_interval_ms": 15000, "ping_count": 3,
+    "net_rtt_interval_ms": 15000, "net_rtt_count": 3,
     "streaming_interval_ms": 120000, "streaming_bytes": 5242880,
     "large_object_interval_ms": 60000, "large_object_bytes": 262144,
     "hifreq_interval_ms": 60000, "hifreq_count": 10,
@@ -26,18 +29,17 @@
   },
 
   "slo": {
-    "connect_ms_median_warn": 120,
-    "connect_ms_median_crit": 400,
-    "success_pct_warn": 98.0,
-    "success_pct_crit": 90.0,
+    "degraded_avg_ms": 50,
+    "degraded_for_min": 5,
+    "down_success_pct": 90,
     "stale_seconds": 120
   },
 
   "targets": [
-    { "package": "isp",              "proxy_url": "${ISP_PROXY_URL}",     "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "datacenter",       "proxy_url": "${DC_PROXY_URL}",      "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "ipv6-residential", "proxy_url": "${IPV6_PROXY_URL}",    "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "ipv6-datacenter",  "proxy_url": "${IPV6_DC_PROXY_URL}", "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "isp_eu",           "proxy_url": "${ISP_EU_PROXY_URL}",  "connect_target": "www.google.com:443", "origin_get": "", "ip_version": 4, "interval_ms": 20000 }
+    { "package": "isp",              "proxy_url": "${ISP_PROXY_URL}",     "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 },
+    { "package": "datacenter",       "proxy_url": "${DC_PROXY_URL}",      "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 },
+    { "package": "ipv6-residential", "proxy_url": "${IPV6_PROXY_URL}",    "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect", "ip_version": 6, "interval_ms": 20000 },
+    { "package": "ipv6-datacenter",  "proxy_url": "${IPV6_DC_PROXY_URL}", "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect", "ip_version": 6, "interval_ms": 20000 },
+    { "package": "isp_eu",           "proxy_url": "${ISP_EU_PROXY_URL}",  "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 }
   ]
 }

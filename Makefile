@@ -1,6 +1,6 @@
-.PHONY: build origin worker website vet test up demo clean
+.PHONY: build origin worker website verify keygen vet test up demo clean
 
-build: origin worker website
+build: origin worker website verify keygen
 
 origin:
 	CGO_ENABLED=0 go build -trimpath -o bin/origin ./cmd/origin
@@ -10,6 +10,12 @@ worker:
 
 website:
 	CGO_ENABLED=0 go build -trimpath -o bin/website ./cmd/website
+
+verify:
+	CGO_ENABLED=0 go build -trimpath -o bin/verify ./cmd/verify
+
+keygen:
+	CGO_ENABLED=0 go build -trimpath -o bin/keygen ./cmd/keygen
 
 vet:
 	go vet ./...

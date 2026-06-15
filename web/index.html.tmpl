@@ -42,7 +42,7 @@
       {{range .Products}}
       <div class="comp">
         <div class="comp-top"><span class="comp-name">{{.Name}}</span><span class="comp-stat" data-status="{{.Status}}">{{.StatusLabel}}</span></div>
-        <div class="metric"><span class="big">{{.Median}}</span><span class="unit">ms median connect · via {{.Vantage}}</span></div>
+        <div class="metric"><span class="big">{{.AvgMs}}</span><span class="unit">ms avg connect · via {{.Vantage}}</span></div>
       </div>
       {{end}}
     </section>
@@ -56,7 +56,7 @@
 
     <section class="metrics">
       <div class="metrics-head">
-        <span id="metrics-title">gateway ping vs proxy connect — select a component</span>
+        <span id="metrics-title">network RTT vs proxy connect — select a component</span>
         <span class="ranges" id="ranges">
           <button data-min="60" class="active">60m</button>
           <button data-min="360">6h</button>
@@ -78,7 +78,7 @@
       <h2>About FlashProxy</h2>
       <p>FlashProxy provides high-performance HTTP and SOCKS5 proxies with Shared ISP, Datacenter, IPv6 Datacenter, and IPv6 Residential IP options. This page reports the real-time health of that network.</p>
       <h2>What this page measures</h2>
-      <p>For each product and vantage, the prober measures proxy connect latency (the time the proxy takes to establish the upstream connection, <code>CONNECT</code> → <code>200</code>), gateway ping (ICMP round-trip time), throughput on streaming and large-object downloads, high-frequency small-payload connection setup, broad scraping reachability across many destinations, long-session stability, and a direct no-proxy baseline — so the proxy's overhead over the raw network is visible at a glance.</p>
+      <p>For each product and vantage, the prober measures proxy connect latency (the time the proxy takes to establish the upstream connection, <code>CONNECT</code> → <code>200</code>), gateway network round-trip (TCP connect RTT), throughput on streaming and large-object downloads, high-frequency small-payload connection setup, broad scraping reachability across many destinations, long-session stability, and a direct no-proxy baseline — so the proxy's overhead over the raw network is visible at a glance. Every recorded measurement is committed to a public, signed, hash-chained integrity ledger so the data is tamper-evident.</p>
     </section>
 
     <section class="faq">

@@ -55,6 +55,19 @@ variable "tls_key" {
   default   = ""
 }
 
+# Integrity-ledger Ed25519 keys (generate with `go run ./cmd/keygen`). The private
+# seed goes to the monitor node only; the public key is published by the website.
+# Pass via TF_VAR_* / tfvars, never committed.
+variable "ledger_signing_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "ledger_pubkey" {
+  type    = string
+  default = ""
+}
+
 # The 5 proxy plans the workers probe (user:pass@host:port). Sensitive.
 variable "proxy_urls" {
   description = "package -> http://user:pass@host:port"

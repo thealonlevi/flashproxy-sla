@@ -1,0 +1,16 @@
+# Keep the build context small and keep secrets/history OUT of image layers.
+.git
+.gitignore
+*.md
+LICENSE
+.env
+.env.*
+bin/
+out/
+deploy/
+# Operator-local real configs may contain live credentials — never copy them in.
+# (Only the demo and example configs are needed in the image.)
+config/*.json
+!config/*.docker.json
+!config/*.example.json
+**/*_test.go

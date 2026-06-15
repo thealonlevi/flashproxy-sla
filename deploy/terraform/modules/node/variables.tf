@@ -13,6 +13,23 @@ variable "go_arch" {
   type    = string
   default = "arm64" # t4g instances
 }
+variable "go_version" {
+  type    = string
+  default = "1.25.0"
+}
+
+# Integrity-ledger signing. Only the monitor node (run_website) needs the private
+# key; it signs checkpoints for ALL streams. The public key is published by the
+# website so anyone can verify.
+variable "ledger_signing_key" {
+  type      = string
+  sensitive = true
+  default   = ""
+}
+variable "ledger_pubkey" {
+  type    = string
+  default = ""
+}
 
 variable "run_website" {
   type    = bool

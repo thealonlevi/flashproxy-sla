@@ -53,12 +53,37 @@ the wrong PID (the proxy) was killed while chasing the port conflict. Do NOT rep
    - In `users.xml`, ONE admin user `sla_admin` with a **strong 32+ char random password**,
      `<access_management>1</access_management>`, and `<networks><ip>::1</ip><ip>127.0.0.1</ip></networks>`
      so the admin is reachable only locally.
+   - **Pin the server timezone to UTC** (the app writes naive-UTC timestamps and
+     compares them against `now()`): `<timezone>UTC</timezone>`.
+   - **Lock down system tables** so the published reader can't read `system.query_log`
+     (other users' queries, incl. the `CREATE USER … BY '…'` plaintext) or
+     `system.users` (password hashes). The grants never include `system.*`, so with
+     these flags the public/website users cannot touch it:
+     ```xml
+     <access_control_improvements>
+       <select_from_system_db_requires_grant>true</select_from_system_db_requires_grant>
+       <select_from_information_schema_requires_grant>true</select_from_information_schema_requires_grant>
+     </access_control_improvements>
+     ```
+   - **Redact passwords from query_log** (defense in depth for the bootstrap step):
+     ```xml
+     <query_masking_rules>
+       <rule><regexp>IDENTIFIED\s+WITH\s+\w+\s+BY\s+'[^']+'</regexp><replace>IDENTIFIED ... BY '[HIDDEN]'</replace></rule>
+     </query_masking_rules>
+     ```
 4. Start via a systemd unit (`clickhouse-flashproxy.service`). Verify:
    `curl http://127.0.0.1:HTTP_PORT/ -H 'X-ClickHouse-User: sla_admin' -H 'X-ClickHouse-Key: <pw>' -d 'SELECT version()'`
-5. Load the **schema** then the **roles** (SQL below). Generate strong random passwords for
-   `flashproxy-status-worker` and `flashproxy-status-website`. For `flashproxy-status-public`
-   use a readable token (e.g. `flashproxy-public-ro`) — it is meant to be published.
-   Send each statement as a separate HTTP request (the HTTP interface = one statement per call).
+5. Load the **schema** and **roles** from the repo (do not hand-copy — these are the
+   canonical, integrity-ledger-aware definitions):
+   - Schema: send `schema/clickhouse.sql` to the admin endpoint (it creates
+     `sla.probe_raw`, `sla.events`, the append-only `sla.ledger` + `sla.ledger_checkpoints`,
+     and the rollup — all UTC, 400-day TTL). The HTTP interface runs one statement per
+     call, so split on `;` (or use `clickhouse-client --multiquery < schema/clickhouse.sql`).
+   - Roles/users: run `deploy/bootstrap-roles.sh` with the passwords in the environment
+     (`SLA_PUBLIC_PASSWORD`, `SLA_WEBSITE_PASSWORD`, `SLA_WORKER_PASSWORD`, plus
+     `CH_ADMIN_URL/USER/PASS`). It keeps plaintext out of shell history. Use strong
+     random passwords for worker/website; for `flashproxy-status-public` use a readable
+     token (e.g. `flashproxy-public-ro`) — it is meant to be published.
 6. Install `cloudflared` and expose ONLY the HTTP port publicly as `ch.flashproxy.com`:
    ```
    cloudflared tunnel login
@@ -72,45 +97,22 @@ the wrong PID (the proxy) was killed while chasing the port conflict. Do NOT rep
    - `curl https://ch.flashproxy.com/ -H 'X-ClickHouse-User: flashproxy-status-public' -H 'X-ClickHouse-Key: <public-pw>' -d 'SELECT 1'` → `1`
    - public user INSERT must FAIL; worker user INSERT must SUCCEED; admin must be
      unreachable via the tunnel (only on loopback).
+   - public user reading **system tables must FAIL**: `... -d 'SELECT * FROM system.users'`
+     and `... -d 'SELECT count() FROM system.query_log'` must both be denied. If either
+     succeeds, the `select_from_system_db_requires_grant` flag (step 3) is not in effect —
+     fix before exposing the tunnel.
+   - integrity ledger present: `... -d 'SELECT count() FROM sla.ledger'` returns a number.
 
-## Schema SQL
+## Schema & roles
 
-```sql
-CREATE DATABASE IF NOT EXISTS sla;
+Both are defined in the repo — load them, don't hand-copy (the embedded copies that
+used to live here drifted out of date):
 
-CREATE TABLE IF NOT EXISTS sla.probe_raw (
-  ts DateTime, vantage LowCardinality(String), package LowCardinality(String),
-  scenario LowCardinality(String), proto LowCardinality(String), target String,
-  ip_version UInt8, success UInt8, error_type LowCardinality(String),
-  dial_ms UInt32, connect_ms UInt32, ttfb_ms UInt32, total_ms UInt32,
-  bytes UInt64, throughput_mbps Float32
-) ENGINE = MergeTree ORDER BY (package, scenario, ts) TTL ts + INTERVAL 90 DAY;
-
-CREATE TABLE IF NOT EXISTS sla.events (
-  ts DateTime DEFAULT now(), type LowCardinality(String),
-  package LowCardinality(String), message String
-) ENGINE = MergeTree ORDER BY ts;
-```
-
-## Roles SQL  (substitute the 3 passwords)
-
-```sql
-CREATE ROLE IF NOT EXISTS sla_reader;
-GRANT SELECT ON sla.* TO sla_reader;
-CREATE ROLE IF NOT EXISTS sla_writer;
-GRANT SELECT, INSERT ON sla.* TO sla_writer;
-
-CREATE SETTINGS PROFILE IF NOT EXISTS sla_public  SETTINGS max_concurrent_queries_for_user = 500, readonly = 1, max_execution_time = 15, max_result_rows = 1000000, max_rows_to_read = 500000000;
-CREATE SETTINGS PROFILE IF NOT EXISTS sla_website SETTINGS max_concurrent_queries_for_user = 50,  readonly = 1, max_execution_time = 30;
-CREATE SETTINGS PROFILE IF NOT EXISTS sla_worker  SETTINGS max_concurrent_queries_for_user = 200;
-
-CREATE USER IF NOT EXISTS 'flashproxy-status-public'  IDENTIFIED WITH sha256_password BY '<PUBLIC_PW>'  SETTINGS PROFILE 'sla_public';
-GRANT sla_reader TO 'flashproxy-status-public';
-CREATE USER IF NOT EXISTS 'flashproxy-status-website' IDENTIFIED WITH sha256_password BY '<WEBSITE_PW>' SETTINGS PROFILE 'sla_website';
-GRANT sla_reader TO 'flashproxy-status-website';
-CREATE USER IF NOT EXISTS 'flashproxy-status-worker'  IDENTIFIED WITH sha256_password BY '<WORKER_PW>'  SETTINGS PROFILE 'sla_worker';
-GRANT sla_writer TO 'flashproxy-status-worker';
-```
+- `schema/clickhouse.sql` — tables incl. the integrity ledger (UTC, 400-day TTL).
+- `schema/roles.sql` + `deploy/bootstrap-roles.sh` — roles, resource-capped profiles
+  (memory/bytes/rows/time + concurrency), and the three users. The public profile is
+  hardened against memory-bomb queries; combined with the step-3 config flags it cannot
+  read `system.*`.
 
 ## Report back
 - `ch.flashproxy.com` reachable over HTTPS: yes/no

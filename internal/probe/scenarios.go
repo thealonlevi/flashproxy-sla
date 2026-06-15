@@ -74,9 +74,12 @@ func openTunnel(proxy *url.URL, target string, timeout time.Duration) (net.Conn,
 }
 
 // getOverTunnel issues a plaintext GET over an established tunnel and drains the
-// body, returning ttfb_ms, bytes, throughput, and status.
-func getOverTunnel(conn net.Conn, br *bufio.Reader, host, path string, timeout time.Duration) (ttfb uint32, n int64, mbps float32, status int, errType string) {
-	_ = conn.SetDeadline(time.Now().Add(timeout))
+// body, returning ttfb_ms, bytes, throughput, and status. bodyTimeout bounds the GET
+// phase independently of the connect phase. Throughput is measured over the TRANSFER
+// window (first byte -> last byte), excluding TTFB, so it reflects sustained
+// bandwidth rather than being diluted by server think-time.
+func getOverTunnel(conn net.Conn, br *bufio.Reader, host, path string, bodyTimeout time.Duration) (ttfb uint32, n int64, mbps float32, status int, errType string) {
+	_ = conn.SetDeadline(time.Now().Add(bodyTimeout))
 	req := "GET " + path + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"
 	start := time.Now()
 	if _, err := conn.Write([]byte(req)); err != nil {
@@ -86,30 +89,34 @@ func getOverTunnel(conn net.Conn, br *bufio.Reader, host, path string, timeout t
 	if err != nil {
 		return 0, 0, 0, 0, classify("get_read", err)
 	}
-	ttfb = ms(time.Since(start))
+	ttfb = ms(time.Since(start)) // request -> headers (time to first byte)
+	firstByte := time.Now()
 	n, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
-	if d := time.Since(start).Seconds(); d > 0 {
+	if d := time.Since(firstByte).Seconds(); d > 0 {
 		mbps = float32(float64(n) * 8 / d / 1e6)
 	}
 	return ttfb, n, mbps, resp.StatusCode, ""
 }
 
 // Streaming mimics heavy streaming/buffering: pull a large object and measure
-// sustained throughput + TTFB. proxy==nil runs the direct (no-proxy) baseline.
-func Streaming(proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
-	return download(scn("streaming", proxy), proxy, origin, sizeBytes, timeout)
+// sustained throughput + TTFB. proxy==nil runs the direct (no-proxy) baseline. The
+// connect phase is bounded by the standard connectTimeout (so its connect_ms lands
+// in the same distribution as the other scenarios), while the long body transfer
+// gets the generous bodyTimeout.
+func Streaming(proxy *url.URL, origin string, sizeBytes int, connectTimeout, bodyTimeout time.Duration) model.ProbeResult {
+	return download(scn("streaming", proxy), proxy, origin, sizeBytes, connectTimeout, bodyTimeout)
 }
 
 // LargeObject mimics the large-object archetype: a medium object; connect/TTFB matter.
 func LargeObject(proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
-	return download(scn("large_object", proxy), proxy, origin, sizeBytes, timeout)
+	return download(scn("large_object", proxy), proxy, origin, sizeBytes, timeout, timeout)
 }
 
-func download(scenario string, proxy *url.URL, origin string, sizeBytes int, timeout time.Duration) model.ProbeResult {
+func download(scenario string, proxy *url.URL, origin string, sizeBytes int, connectTimeout, bodyTimeout time.Duration) model.ProbeResult {
 	r := model.ProbeResult{Scenario: scenario, Proto: "http", Target: origin, TS: time.Now().UTC()}
 	start := time.Now()
-	conn, br, dialMs, connMs, et := openTunnel(proxy, origin, timeout)
+	conn, br, dialMs, connMs, et := openTunnel(proxy, origin, connectTimeout)
 	r.DialMS, r.ConnectMS = dialMs, connMs
 	if et != "" {
 		r.ErrorType = et
@@ -117,7 +124,7 @@ func download(scenario string, proxy *url.URL, origin string, sizeBytes int, tim
 		return r
 	}
 	defer conn.Close()
-	ttfb, n, mbps, status, et2 := getOverTunnel(conn, br, hostOnly(origin), fmt.Sprintf("/bytes/%d", sizeBytes), timeout)
+	ttfb, n, mbps, status, et2 := getOverTunnel(conn, br, hostOnly(origin), fmt.Sprintf("/bytes/%d", sizeBytes), bodyTimeout)
 	r.TTFBMS, r.Bytes, r.ThroughputMbps = ttfb, uint64(n), mbps
 	r.TotalMS = ms(time.Since(start))
 	if et2 != "" {

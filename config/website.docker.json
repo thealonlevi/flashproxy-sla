@@ -1,7 +1,8 @@
 {
   "listen": "0.0.0.0:8080",
   "web_dir": "/app/web",
+  "ledger_pubkey": "${LEDGER_PUBKEY}",
   "clickhouse": { "url": "http://clickhouse:8123", "db": "sla", "user": "sla", "password": "sla" },
   "public_clickhouse": { "url": "http://localhost:8123", "db": "sla", "user": "flashproxy-status-public", "password": "flashproxy-public-ro", "note": "Demo only — local ClickHouse." },
-  "slo": { "connect_ms_median_warn": 120, "connect_ms_median_crit": 400, "success_pct_warn": 98.0, "success_pct_crit": 90.0, "stale_seconds": 120 }
+  "slo": { "degraded_avg_ms": 50, "degraded_for_min": 5, "down_success_pct": 90, "stale_seconds": 120 }
 }

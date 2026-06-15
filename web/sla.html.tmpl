@@ -46,7 +46,7 @@
       <p>FlashProxy guarantees <strong>100% availability</strong> for each covered product. <strong>Any</strong> qualifying downtime or service degradation results in <strong>automatic, proportional compensation</strong> — no claim or ticket required. There is no monthly downtime allowance: the bar is 100%, and compensation accrues from the first qualifying minute (subject to the plan-type thresholds and exclusions below). This SLA is measured and enforced per product, per calendar month, per affected customer.</p>
 
       <h2>2. Definitions &amp; Measurement</h2>
-      <p>Availability is measured by FlashProxy's independent synthetic monitoring, which probes each covered product from <strong>multiple geographic vantage points at 1-minute granularity</strong> (US and EU; each product is measured from its geographically appropriate vantage). The live record and 90-day history are published at <a href="/" class="plain">status.flashproxy.com</a> and serve as the <strong>system of record</strong> for all SLA calculations (see §3 — this system and its data are fully public).</p>
+      <p>Availability is measured by FlashProxy's independent synthetic monitoring, which probes each covered product from <strong>multiple geographic vantage points at 1-minute granularity</strong> (US and EU; each product is measured from its geographically appropriate vantage). The live record and a <strong>rolling 13-month history</strong> are published at <a href="/" class="plain">status.flashproxy.com</a> and serve as the <strong>system of record</strong> for all SLA calculations (see §3 — this system and its data are fully public and integrity-protected).</p>
       <ul>
         <li><strong>Available</strong> — the product's gateway is reachable and successfully establishes upstream proxy connections (<code>CONNECT → 200</code>).</li>
         <li><strong>Degraded</strong> — the product is Available, but its <strong>average connect latency from its best (lowest-latency) vantage exceeds 50 ms for 5 consecutive minutes</strong>. It remains Degraded until that average recovers below 50 ms. Degraded time counts at <strong>½ weight</strong>.</li>
@@ -66,8 +66,9 @@
             <li>Example: <code>curl https://ch.flashproxy.com/ -H 'X-ClickHouse-User: flashproxy-status-public' -H 'X-ClickHouse-Key: flashproxy-public-ro' -d 'SELECT * FROM sla.probe_raw LIMIT 10'</code></li>
           </ul>
         </li>
+        <li><strong>Tamper-evident by design.</strong> Every batch of measurements is committed to an <strong>append-only, hash-chained ledger</strong> (<code>sla.ledger</code>) whose heads are periodically <strong>Ed25519-signed</strong> (<code>sla.ledger_checkpoints</code>). Any retroactive edit, deletion, or reordering of a measurement breaks the chain against the signed checkpoints. The signing public key and the exact hashing scheme are published at <code>/api/meta</code>, and a one-command open-source verifier (<code>cmd/verify</code>) re-checks the entire chain and every signature using only public read access.</li>
       </ul>
-      <p>Because both the measurement code and the underlying data are public, every availability figure and every compensation determination under this SLA can be <strong>independently reproduced and verified</strong>.</p>
+      <p>Because the measurement code, the underlying data, <em>and</em> a cryptographic integrity proof are all public, every availability figure and every compensation determination under this SLA can be <strong>independently reproduced, verified, and shown to be untampered</strong>.</p>
 
       <h2>4. Exclusions</h2>
       <p>The following never count as Down or Degraded time:</p>
@@ -106,7 +107,7 @@
       <p>Good-faith disputes are reviewed via <a href="mailto:contact@flashproxy.io">contact@flashproxy.io</a> within 30 days of issuance.</p>
 
       <h2>8. Performance Targets (Service-Level Objectives)</h2>
-      <p>The target response times under <strong>Covered Products</strong> are objectives — they define the "Degraded" threshold in §2 but are not, in themselves, credit-bearing (latency and request success also depend on the customer's targets and network). Shared ISP EU is in launch phase (Netherlands live, additional EU countries rolling out) and is measured from FlashProxy's EU vantage.</p>
+      <p>The target response times under <strong>Covered Products</strong> are performance <em>objectives</em> and are not, in themselves, credit-bearing (latency and request success also depend on the customer's targets and network). The single credit-bearing <strong>"Degraded" trigger is the 50 ms best-vantage threshold defined in §2</strong>, applied uniformly across covered products. Shared ISP EU is in launch phase (Netherlands live, additional EU countries rolling out) and is measured from FlashProxy's EU vantage.</p>
 
       <h2>9. General Terms</h2>
       <p>This SLA is the customer's sole and exclusive remedy for availability and performance shortfalls. Total compensation in any month will not exceed the limits stated in §5 and §6. FlashProxy may revise this SLA with at least 30 days' notice; the current version is always published at <a href="/sla" class="plain">status.flashproxy.com/sla</a>. Capitalized terms not defined here have the meaning given in the Terms of Service.</p>

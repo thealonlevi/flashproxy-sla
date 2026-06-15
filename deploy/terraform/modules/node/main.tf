@@ -6,11 +6,15 @@ terraform {
 
 locals {
   ipv6_pkgs = toset(["ipv6-residential", "ipv6-datacenter"])
+  # The headline `connect` SLA metric targets our OWN deterministic origin (resolved
+  # at boot via the __ORIGIN__/__ORIGIN6__ placeholders), not a third-party site, so
+  # the number isn't polluted by Google/Cloudflare availability or per-IP blocking.
+  # (Third-party reachability is still measured separately by the `scraping` scenario.)
   targets = [for pkg, u in var.proxy_urls : {
     package        = pkg
     proxy_url      = u
-    connect_target = "www.google.com:443"
-    origin_get     = ""
+    connect_target = contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__"
+    origin_get     = "/connect"
     ip_version     = contains(local.ipv6_pkgs, pkg) ? 6 : 4
     interval_ms    = 10000
   }]
@@ -137,6 +141,14 @@ resource "aws_instance" "this" {
   vpc_security_group_ids = [aws_security_group.this.id]
   ipv6_address_count     = 1 # dual-stack: origin reachable over v6 for ipv6 packages
 
+  # Enforce IMDSv2 explicitly (don't rely on the account default) and limit the hop
+  # count to 1 so a containerized/forwarded SSRF can't reach instance metadata.
+  metadata_options {
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 1
+  }
+
   # Don't recreate a running instance just because user-data text changed
   # (we reconcile in place); only a deliberate -replace rebuilds it.
   user_data_replace_on_change = false
@@ -145,6 +157,7 @@ resource "aws_instance" "this" {
     repo_url            = var.repo_url
     git_ref             = var.git_ref
     go_arch             = var.go_arch
+    go_version          = var.go_version
     vantage             = var.vantage
     run_website         = var.run_website
     run_worker          = var.run_worker
@@ -152,6 +165,8 @@ resource "aws_instance" "this" {
     ch_url              = var.ch_url
     ch_worker_password  = var.ch_worker_password
     ch_website_password = var.ch_website_password
+    ledger_signing_key  = var.ledger_signing_key
+    ledger_pubkey       = var.ledger_pubkey
     tls_cert            = var.tls_cert
     tls_key             = var.tls_key
     targets_json        = jsonencode(local.targets)

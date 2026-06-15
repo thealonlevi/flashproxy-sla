@@ -18,7 +18,7 @@ function vantageOf(c) {
 function barTitle(b) {
   const t = new Date(b.t * 1000).toLocaleTimeString();
   if (b.status === "no_data" || !b.samples) return t + " · no data";
-  return `${t} · ${b.status} · median ${Math.round(b.median)}ms · ${Math.round(b.success_pct)}% ok · n=${Math.round(b.samples)}`;
+  return `${t} · ${b.status} · avg ${Math.round(b.connect_ms_avg)}ms · ${Math.round(b.success_pct)}% ok · n=${Math.round(b.samples)}`;
 }
 
 async function loadOverview() {
@@ -59,7 +59,7 @@ function renderComponents() {
     const chips = c.vantages.map((vv) => {
       const cls = "vchip" + (vv.vantage === v.vantage ? " sel" : "") +
                   (vv.vantage === c.default_vantage ? " best" : "");
-      const med = vv.status === "no_data" ? "—" : fmt(vv.connect_ms_median) + "ms";
+      const med = vv.status === "no_data" ? "—" : fmt(vv.connect_ms_avg) + "ms";
       const star = vv.vantage === c.default_vantage ? "★ " : "";
       return `<button class="${cls}" data-pkg="${c.package}" data-v="${vv.vantage}" data-status="${vv.status}">${star}${shortV(vv.vantage)} ${med}</button>`;
     }).join("");
@@ -69,14 +69,13 @@ function renderComponents() {
         `<span class="comp-name">${c.package}</span>` +
         `<span class="comp-stat" data-status="${v.status}">${v.status.replace("_", " ")}</span>` +
       `</div>` +
-      `<div class="metric"><span class="big">${fmt(v.connect_ms_median)}</span>` +
-        `<span class="unit">ms median connect · via ${shortV(v.vantage)}</span></div>` +
+      `<div class="metric"><span class="big">${fmt(v.connect_ms_avg)}</span>` +
+        `<span class="unit">ms avg connect · via ${shortV(v.vantage)}</span></div>` +
       `<div class="vchips">${chips}</div>` +
       `<div class="bars">${bars}</div>` +
       `<div class="comp-bot">` +
         `<span class="left">${win}m ago</span>` +
-        `<span class="mid">avg ${fmt(v.connect_ms_avg)}ms · p95 ${fmt(v.connect_ms_p95)}ms · ` +
-          `${(v.success_pct ?? 0).toFixed(1)}% ok · n=${fmt(v.samples)}/10m</span>` +
+        `<span class="mid">${(v.success_pct ?? 0).toFixed(1)}% ok · n=${fmt(v.samples)}/min</span>` +
         `<span class="right">uptime ${(v.uptime_pct ?? 100).toFixed(1)}% · now</span>` +
       `</div>`;
 
@@ -104,7 +103,7 @@ function selectComponent(pkg) {
 async function loadSeries() {
   if (!selected) return;
   const v = vantageSel[selected] || "";
-  document.getElementById("metrics-title").textContent = `gateway ping vs proxy connect · ${selected} · via ${shortV(v)}`;
+  document.getElementById("metrics-title").textContent = `network RTT vs proxy connect · ${selected} · via ${shortV(v)}`;
   let d;
   try {
     d = await (await fetch(`api/series?package=${encodeURIComponent(selected)}&minutes=${curMin}&vantage=${encodeURIComponent(v)}`)).json();
@@ -115,21 +114,21 @@ async function loadSeries() {
 
 const SERIES_STYLE = {
   connect: { label: "proxy connect", color: "#2f9e44" },
-  ping: { label: "gateway ping", color: "#3b82f6" },
+  net_rtt: { label: "network RTT", color: "#3b82f6" },
 };
 
-const SCN_ORDER = ["ping", "connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
+const SCN_ORDER = ["net_rtt", "connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
 const SCN_LABEL = {
-  ping: "gateway ping", connect: "connect", streaming: "streaming", large_object: "large object",
+  net_rtt: "network RTT", connect: "connect", streaming: "streaming", large_object: "large object",
   hifreq_small: "hi-freq small", scraping: "scraping", long_session: "long session",
 };
 const SCN_KPI = {
-  ping: (s) => `${fmt(s.connect_ms_median)}ms rtt`,
-  connect: (s) => `${fmt(s.connect_ms_median)}ms connect`,
+  net_rtt: (s) => `${fmt(s.connect_ms_avg)}ms rtt`,
+  connect: (s) => `${fmt(s.connect_ms_avg)}ms connect`,
   streaming: (s) => `${fmt(s.throughput_mbps_avg)} Mbps`,
   large_object: (s) => `${fmt(s.ttfb_ms_median)}ms ttfb`,
-  hifreq_small: (s) => `${fmt(s.connect_ms_median)}ms/conn · ${fmt(s.success_pct)}%`,
-  scraping: (s) => `${fmt(s.connect_ms_median)}ms median`,
+  hifreq_small: (s) => `${fmt(s.connect_ms_avg)}ms/conn · ${fmt(s.success_pct)}%`,
+  scraping: (s) => `${fmt(s.connect_ms_avg)}ms avg`,
   long_session: (s) => `${fmt(s.success_pct)}% held · ${fmt(s.total_ms_median / 1000)}s`,
 };
 
@@ -148,12 +147,14 @@ async function loadScenarios(pkg, vantage) {
     const kpi = have ? SCN_KPI[name](p) : "— no data";
     const ok = have ? (p.success_pct >= 98 ? "op" : (p.success_pct >= 90 ? "deg" : "dn")) : "nd";
     let sub = "";
-    if (name !== "ping") {
+    if (name !== "net_rtt") {
       const haveD = dr && dr.samples;
       sub += `<div class="scn-direct">direct: ${haveD ? SCN_KPI[name](dr) : "—"}</div>`;
-      // proxy overhead for latency-style scenarios (connect-ms based)
+      // proxy overhead for latency-style scenarios: the proxy pays the vantage->proxy
+      // hop (dial_ms) PLUS the proxy->target establishment (connect_ms); the direct
+      // baseline pays only its own connect. So overhead = (proxy dial+connect) - direct connect.
       if (have && haveD && name !== "streaming" && name !== "large_object") {
-        const d = Math.round(p.connect_ms_median - dr.connect_ms_median);
+        const d = Math.round((p.connect_ms_avg + (p.dial_ms_avg || 0)) - dr.connect_ms_avg);
         sub += `<div class="scn-delta">proxy ${d >= 0 ? "+" : ""}${d}ms</div>`;
       }
     }
@@ -173,7 +174,7 @@ function drawChart(series) {
     return;
   }
   const allT = [], allY = [];
-  names.forEach((n) => series[n].forEach((p) => { allT.push(+p.t); allY.push(+p.median); }));
+  names.forEach((n) => series[n].forEach((p) => { allT.push(+p.t); allY.push(+p.value); }));
   const minX = Math.min(...allT), maxX = Math.max(...allT);
   const maxY = Math.max(10, Math.ceil(Math.max(...allY) * 1.25));
   const X = (t) => pad + (maxX === minX ? 0 : (t - minX) / (maxX - minX)) * (W - 2 * pad);
@@ -182,7 +183,7 @@ function drawChart(series) {
 
   const paths = names.map((n) => {
     const color = (SERIES_STYLE[n] || {}).color || "#888";
-    const line = series[n].map((p, i) => (i ? "L" : "M") + X(+p.t).toFixed(1) + " " + Y(+p.median).toFixed(1)).join(" ");
+    const line = series[n].map((p, i) => (i ? "L" : "M") + X(+p.t).toFixed(1) + " " + Y(+p.value).toFixed(1)).join(" ");
     return `<path d="${line}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
   }).join("");
 
@@ -200,7 +201,7 @@ function drawChart(series) {
     const st = SERIES_STYLE[n] || { label: n, color: "#888" };
     const pts = series[n];
     const last = pts[pts.length - 1];
-    return `<span style="color:${st.color}">■</span> ${st.label} <b>${Math.round(+last.median)}ms</b>`;
+    return `<span style="color:${st.color}">■</span> ${st.label} <b>${Math.round(+last.value)}ms</b>`;
   }).join(" &nbsp;&nbsp; ");
 }
 

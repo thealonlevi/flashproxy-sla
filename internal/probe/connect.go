@@ -4,6 +4,7 @@
 package probe
 
 import (
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -51,7 +52,15 @@ func ConnectScenario(proxy *url.URL, target, originGet string, timeout time.Dura
 	return r
 }
 
-func ms(d time.Duration) uint32 { return uint32(d.Milliseconds()) }
+// ms converts a duration to milliseconds, ROUNDING to nearest (not truncating) so a
+// 1.9 ms operation records 2, not 1. Sub-half-millisecond ops still round to 0,
+// which is fine at the SLA's tens-of-ms granularity.
+func ms(d time.Duration) uint32 {
+	if d <= 0 {
+		return 0
+	}
+	return uint32(math.Round(float64(d) / float64(time.Millisecond)))
+}
 
 func hostOnly(hostport string) string {
 	if h, _, err := net.SplitHostPort(hostport); err == nil {

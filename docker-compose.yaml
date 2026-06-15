@@ -26,16 +26,19 @@ services:
   origin:
     build: .
     command: ["/app/origin", "-addr=:8080"]
-    ports: ["8081:8080"]
+    # bound to localhost: a demo origin should not be world-reachable.
+    ports: ["127.0.0.1:8081:8080"]
 
   website:
     build: .
     command: ["/app/website", "-config=/app/config/website.json"]
     depends_on:
       clickhouse: { condition: service_healthy }
+    environment:
+      LEDGER_PUBKEY: ${LEDGER_PUBKEY:-}
     volumes:
       - ./config/website.docker.json:/app/config/website.json:ro
-    ports: ["8080:8080"]
+    ports: ["127.0.0.1:8080:8080"]
 
   worker:
     build: .
@@ -44,9 +47,10 @@ services:
       clickhouse: { condition: service_healthy }
     environment:
       ISP_PROXY_URL: ${ISP_PROXY_URL:-}
+      LEDGER_SIGNING_KEY: ${LEDGER_SIGNING_KEY:-}
+    profiles: ["demo"]
     volumes:
       - ./config/worker.docker.json:/app/config/worker.json:ro
-    profiles: ["demo"]
 
 volumes:
   chdata:
