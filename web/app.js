@@ -113,12 +113,13 @@ async function loadSeries() {
   loadScenarios(selected, v);
 }
 
-const SCN_ORDER = ["connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
+const SCN_ORDER = ["ping", "connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
 const SCN_LABEL = {
-  connect: "connect", streaming: "streaming", large_object: "large object",
+  ping: "gateway ping", connect: "connect", streaming: "streaming", large_object: "large object",
   hifreq_small: "hi-freq small", scraping: "scraping", long_session: "long session",
 };
 const SCN_KPI = {
+  ping: (s) => `${fmt(s.connect_ms_median)}ms rtt`,
   connect: (s) => `${fmt(s.connect_ms_median)}ms connect`,
   streaming: (s) => `${fmt(s.throughput_mbps_avg)} Mbps`,
   large_object: (s) => `${fmt(s.ttfb_ms_median)}ms ttfb`,

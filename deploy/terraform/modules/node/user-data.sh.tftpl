@@ -4,7 +4,7 @@
 set -euxo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
-apt-get install -y git ca-certificates curl
+apt-get install -y git ca-certificates curl iputils-ping
 
 # Go toolchain. cloud-init runs as root with no $HOME, so Go has nowhere for its
 # build cache — set HOME/GOCACHE explicitly.

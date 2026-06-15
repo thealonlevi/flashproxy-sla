@@ -52,6 +52,8 @@ type ScenarioCfg struct {
 	ScrapingIntervalMS    int `json:"scraping_interval_ms"`
 	LongSessionIntervalMS int `json:"long_session_interval_ms"`
 	LongSessionHoldMS     int `json:"long_session_hold_ms"`
+	PingIntervalMS        int `json:"ping_interval_ms"`
+	PingCount             int `json:"ping_count"`
 }
 
 type Config struct {
@@ -117,6 +119,8 @@ func loadConfig(p string) Config {
 	s.ScrapingIntervalMS = defInt(s.ScrapingIntervalMS, 60000)
 	s.LongSessionIntervalMS = defInt(s.LongSessionIntervalMS, 180000)
 	s.LongSessionHoldMS = defInt(s.LongSessionHoldMS, 20000)
+	s.PingIntervalMS = defInt(s.PingIntervalMS, 15000)
+	s.PingCount = defInt(s.PingCount, 3)
 	if len(c.ScrapeHosts) == 0 {
 		// all dual-stack so ipv6-egress packages can reach them too
 		c.ScrapeHosts = []string{
@@ -164,6 +168,10 @@ func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
 	})
 	go loop(s.ScrapingIntervalMS, func() {
 		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)
+	})
+	// ICMP ping to the gateway host — raw network RTT, runs alongside everything.
+	go loop(s.PingIntervalMS, func() {
+		emit(probe.Ping(proxy.Hostname(), s.PingCount, timeout))
 	})
 	// payload scenarios need a self-hosted origin reachable over the package's IP
 	// family. ipv6 packages egress over v6, so they need a dual-stack origin.
