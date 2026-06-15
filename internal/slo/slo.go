@@ -20,8 +20,10 @@ type SLO struct {
 }
 
 // Status is the current rollup + verdict for one package (last 10 minutes).
+// Vantage is empty for package-level rollups, set for per-vantage rollups.
 type Status struct {
 	Package         string  `json:"package"`
+	Vantage         string  `json:"vantage"`
 	Status          string  `json:"status"`
 	ConnectMsAvg    float64 `json:"connect_ms_avg"`
 	ConnectMsMedian float64 `json:"connect_ms_median"`
@@ -89,6 +91,57 @@ func Overall(statuses []string) (string, string) {
 		"no_data":     "Awaiting Data",
 	}[worst]
 	return worst, label
+}
+
+// StatusByVantageSQL rolls up the connect scenario per package AND vantage.
+func StatusByVantageSQL(db string) string {
+	return fmt.Sprintf(`SELECT package, vantage,
+  round(avg(connect_ms), 1)            AS connect_ms_avg,
+  round(quantile(0.5)(connect_ms), 1)  AS connect_ms_median,
+  round(quantile(0.95)(connect_ms), 1) AS connect_ms_p95,
+  round(100 * sum(success) / count(), 2) AS success_pct,
+  toUInt32(count())                    AS samples,
+  toUInt32(toUnixTimestamp(max(ts)))   AS last_seen_unix
+FROM %s.probe_raw
+WHERE scenario = 'connect' AND ts > now() - INTERVAL 10 MINUTE
+GROUP BY package, vantage ORDER BY package, vantage`, db)
+}
+
+// BarsByVantageSQL returns per-package, per-vantage, per-minute uptime buckets.
+func BarsByVantageSQL(db string, windowMin int) string {
+	return fmt.Sprintf(`SELECT package, vantage,
+  toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
+  round(quantile(0.5)(connect_ms), 1)    AS median,
+  round(100 * sum(success) / count(), 2) AS success_pct,
+  toUInt32(count())                      AS samples
+FROM %s.probe_raw
+WHERE scenario = 'connect' AND ts > now() - INTERVAL %d MINUTE
+GROUP BY package, vantage, t ORDER BY package, vantage, t`, db, windowMin)
+}
+
+// FetchByVantage returns the current status per (package, vantage).
+func FetchByVantage(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status, error) {
+	rows, err := ch.QueryJSON(ctx, StatusByVantageSQL(db))
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now().Unix()
+	out := make([]Status, 0, len(rows))
+	for _, m := range rows {
+		age := now - int64(chstore.Num(m, "last_seen_unix"))
+		out = append(out, Status{
+			Package:         chstore.Str(m, "package"),
+			Vantage:         chstore.Str(m, "vantage"),
+			Status:          Eval(chstore.Num(m, "connect_ms_median"), chstore.Num(m, "success_pct"), age, s),
+			ConnectMsAvg:    chstore.Num(m, "connect_ms_avg"),
+			ConnectMsMedian: chstore.Num(m, "connect_ms_median"),
+			ConnectMsP95:    chstore.Num(m, "connect_ms_p95"),
+			SuccessPct:      chstore.Num(m, "success_pct"),
+			Samples:         chstore.Num(m, "samples"),
+			AgeSeconds:      age,
+		})
+	}
+	return out, nil
 }
 
 // Fetch runs StatusSQL and returns the per-package current status.

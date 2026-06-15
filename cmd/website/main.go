@@ -117,34 +117,78 @@ type barPoint struct {
 	Samples    float64 `json:"samples"`
 }
 
+// vantageView is one package's stats from one vantage (with its own uptime bars).
+type vantageView struct {
+	Vantage         string     `json:"vantage"`
+	Status          string     `json:"status"`
+	ConnectMsAvg    float64    `json:"connect_ms_avg"`
+	ConnectMsMedian float64    `json:"connect_ms_median"`
+	ConnectMsP95    float64    `json:"connect_ms_p95"`
+	SuccessPct      float64    `json:"success_pct"`
+	Samples         float64    `json:"samples"`
+	AgeSeconds      int64      `json:"age_seconds"`
+	UptimePct       float64    `json:"uptime_pct"`
+	Bars            []barPoint `json:"bars"`
+}
+
+// component is one package: headline metrics come from its best vantage, and the
+// full per-vantage breakdown is in Vantages so the page can toggle.
 type component struct {
-	slo.Status
-	UptimePct float64    `json:"uptime_pct"`
-	Bars      []barPoint `json:"bars"`
+	Package         string        `json:"package"`
+	Status          string        `json:"status"`
+	DefaultVantage  string        `json:"default_vantage"`
+	ConnectMsAvg    float64       `json:"connect_ms_avg"`
+	ConnectMsMedian float64       `json:"connect_ms_median"`
+	ConnectMsP95    float64       `json:"connect_ms_p95"`
+	SuccessPct      float64       `json:"success_pct"`
+	Samples         float64       `json:"samples"`
+	UptimePct       float64       `json:"uptime_pct"`
+	Bars            []barPoint    `json:"bars"`
+	Vantages        []vantageView `json:"vantages"`
+}
+
+// better reports whether vantage a should be preferred over b as the default:
+// real data beats no-data, then lowest median connect-ms, then success, then samples.
+func better(a, b vantageView) bool {
+	aData, bData := a.Status != "no_data", b.Status != "no_data"
+	if aData != bData {
+		return aData
+	}
+	if a.ConnectMsMedian != b.ConnectMsMedian {
+		return a.ConnectMsMedian < b.ConnectMsMedian
+	}
+	if a.SuccessPct != b.SuccessPct {
+		return a.SuccessPct > b.SuccessPct
+	}
+	return a.Samples > b.Samples
 }
 
 func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
 	const windowMin = 90
 	ctx := r.Context()
-	cur, err := slo.Fetch(ctx, s.ch, s.cfg.ClickHouse.DB, s.cfg.SLO)
+	cur, err := slo.FetchByVantage(ctx, s.ch, s.cfg.ClickHouse.DB, s.cfg.SLO)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	rows, err := s.ch.QueryJSON(ctx, slo.BarsSQL(s.cfg.ClickHouse.DB, windowMin))
+	rows, err := s.ch.QueryJSON(ctx, slo.BarsByVantageSQL(s.cfg.ClickHouse.DB, windowMin))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	idx := map[string]map[int64]barPoint{}
+	// pkg -> vantage -> minute -> bar
+	idx := map[string]map[string]map[int64]barPoint{}
 	for _, m := range rows {
-		p := chstore.Str(m, "package")
+		p, v := chstore.Str(m, "package"), chstore.Str(m, "vantage")
 		if idx[p] == nil {
-			idx[p] = map[int64]barPoint{}
+			idx[p] = map[string]map[int64]barPoint{}
+		}
+		if idx[p][v] == nil {
+			idx[p][v] = map[int64]barPoint{}
 		}
 		t := int64(chstore.Num(m, "t"))
-		idx[p][t] = barPoint{
+		idx[p][v][t] = barPoint{
 			T: t, Median: chstore.Num(m, "median"),
 			SuccessPct: chstore.Num(m, "success_pct"), Samples: chstore.Num(m, "samples"),
 			Status: slo.Eval(chstore.Num(m, "median"), chstore.Num(m, "success_pct"), 0, s.cfg.SLO),
@@ -158,29 +202,66 @@ func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		grid[i] = gridEnd - int64(windowMin-1-i)*60
 	}
 
-	comps := make([]component, 0, len(cur))
-	statuses := make([]string, 0, len(cur))
-	for _, ps := range cur {
-		bars := make([]barPoint, windowMin)
-		var withData, ok int
-		for i, t := range grid {
-			if b, found := idx[ps.Package][t]; found {
-				bars[i] = b
-				withData++
-				if b.Status == "operational" {
-					ok++
+	// group per-vantage statuses by package, preserving first-seen order
+	byPkg := map[string][]slo.Status{}
+	order := []string{}
+	for _, st := range cur {
+		if _, ok := byPkg[st.Package]; !ok {
+			order = append(order, st.Package)
+		}
+		byPkg[st.Package] = append(byPkg[st.Package], st)
+	}
+
+	comps := make([]component, 0, len(order))
+	statuses := make([]string, 0, len(order))
+	for _, pkg := range order {
+		views := make([]vantageView, 0, len(byPkg[pkg]))
+		bestIdx := 0
+		for _, st := range byPkg[pkg] {
+			bars := make([]barPoint, windowMin)
+			var withData, ok int
+			for i, t := range grid {
+				if b, found := idx[pkg][st.Vantage][t]; found {
+					bars[i] = b
+					withData++
+					if b.Status == "operational" {
+						ok++
+					}
+				} else {
+					bars[i] = barPoint{T: t, Status: "no_data"}
 				}
-			} else {
-				bars[i] = barPoint{T: t, Status: "no_data"}
+			}
+			up := 100.0
+			if withData > 0 {
+				up = float64(ok) / float64(withData) * 100
+			}
+			up = float64(int(up*100+0.5)) / 100
+			views = append(views, vantageView{
+				Vantage: st.Vantage, Status: st.Status,
+				ConnectMsAvg: st.ConnectMsAvg, ConnectMsMedian: st.ConnectMsMedian,
+				ConnectMsP95: st.ConnectMsP95, SuccessPct: st.SuccessPct,
+				Samples: st.Samples, AgeSeconds: st.AgeSeconds,
+				UptimePct: up, Bars: bars,
+			})
+			if better(views[len(views)-1], views[bestIdx]) {
+				bestIdx = len(views) - 1
 			}
 		}
-		up := 100.0
-		if withData > 0 {
-			up = float64(ok) / float64(withData) * 100
-		}
-		up = float64(int(up*100+0.5)) / 100
-		comps = append(comps, component{Status: ps, UptimePct: up, Bars: bars})
-		statuses = append(statuses, ps.Status)
+		best := views[bestIdx]
+		comps = append(comps, component{
+			Package:         pkg,
+			Status:          best.Status,
+			DefaultVantage:  best.Vantage,
+			ConnectMsAvg:    best.ConnectMsAvg,
+			ConnectMsMedian: best.ConnectMsMedian,
+			ConnectMsP95:    best.ConnectMsP95,
+			SuccessPct:      best.SuccessPct,
+			Samples:         best.Samples,
+			UptimePct:       best.UptimePct,
+			Bars:            best.Bars,
+			Vantages:        views,
+		})
+		statuses = append(statuses, best.Status)
 	}
 
 	status, label := slo.Overall(statuses)
@@ -205,14 +286,22 @@ func (s *server) handleSeries(w http.ResponseWriter, r *http.Request) {
 			mins = n
 		}
 	}
+	vantageFilter := ""
+	if v := r.URL.Query().Get("vantage"); v != "" {
+		if !pkgRe.MatchString(v) {
+			http.Error(w, "bad vantage", http.StatusBadRequest)
+			return
+		}
+		vantageFilter = fmt.Sprintf(" AND vantage = '%s'", v)
+	}
 	sql := fmt.Sprintf(`SELECT toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
   round(quantile(0.5)(connect_ms), 1)  AS median,
   round(avg(connect_ms), 1)            AS avg,
   round(quantile(0.95)(connect_ms), 1) AS p95,
   round(100 * sum(success) / count(), 2) AS success_pct
 FROM %s.probe_raw
-WHERE scenario = 'connect' AND package = '%s' AND ts > now() - INTERVAL %d MINUTE
-GROUP BY t ORDER BY t`, s.cfg.ClickHouse.DB, pkg, mins)
+WHERE scenario = 'connect' AND package = '%s'%s AND ts > now() - INTERVAL %d MINUTE
+GROUP BY t ORDER BY t`, s.cfg.ClickHouse.DB, pkg, vantageFilter, mins)
 	rows, err := s.ch.QueryJSON(r.Context(), sql)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
