@@ -13,7 +13,7 @@ ch_website_password = "REDACTED-from-the-clickhouse-deploy-step"
 proxy_urls = {
   "isp"             = "http://USER:PASS@isp.example.com:30"
   "datacenter"      = "http://USER:PASS@dc.example.com:777"
-  "ipv6"            = "http://USER:PASS@ipv6.example.com:30"
+  "ipv6-residential" = "http://USER:PASS@ipv6.example.com:30"
   "ipv6-datacenter" = "http://USER:PASS@ipv6-dc.example.com:50"
   "isp_eu"          = "http://USER:PASS@isp-eu.example.com:30"
 }

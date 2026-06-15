@@ -5,7 +5,7 @@ terraform {
 }
 
 locals {
-  ipv6_pkgs = toset(["ipv6", "ipv6-datacenter"])
+  ipv6_pkgs = toset(["ipv6-residential", "ipv6-datacenter"])
   targets = [for pkg, u in var.proxy_urls : {
     package        = pkg
     proxy_url      = u

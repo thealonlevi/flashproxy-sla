@@ -61,7 +61,8 @@ type Config struct {
 	Discord     string      `json:"discord_webhook"`
 	ClickHouse  chConn      `json:"clickhouse"`
 	SLO         slo.SLO     `json:"slo"`
-	Origin      string      `json:"origin"`       // host:port of a self-hosted origin for payload scenarios
+	Origin      string      `json:"origin"`       // host:port of a self-hosted origin (IPv4 path) for payload scenarios
+	OriginIPv6  string      `json:"origin_ipv6"`  // dual-stack/v6 origin for ipv6 packages; empty => they skip payload scenarios
 	ScrapeHosts []string    `json:"scrape_hosts"` // CONNECT targets for the scraping scenario
 	Scenarios   ScenarioCfg `json:"scenarios"`
 	Targets     []Target    `json:"targets"`
@@ -117,9 +118,10 @@ func loadConfig(p string) Config {
 	s.LongSessionIntervalMS = defInt(s.LongSessionIntervalMS, 180000)
 	s.LongSessionHoldMS = defInt(s.LongSessionHoldMS, 20000)
 	if len(c.ScrapeHosts) == 0 {
+		// all dual-stack so ipv6-egress packages can reach them too
 		c.ScrapeHosts = []string{
-			"www.google.com:443", "www.cloudflare.com:443", "www.microsoft.com:443",
-			"www.amazon.com:443", "www.wikipedia.org:443",
+			"www.google.com:443", "www.cloudflare.com:443", "www.facebook.com:443",
+			"www.wikipedia.org:443", "www.microsoft.com:443",
 		}
 	}
 	return c
@@ -163,19 +165,24 @@ func runTarget(cfg Config, t Target, out chan<- model.ProbeResult) {
 	go loop(s.ScrapingIntervalMS, func() {
 		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)
 	})
-	// payload scenarios need the self-hosted origin.
-	if cfg.Origin != "" {
+	// payload scenarios need a self-hosted origin reachable over the package's IP
+	// family. ipv6 packages egress over v6, so they need a dual-stack origin.
+	origin := cfg.Origin
+	if t.IPVersion == 6 {
+		origin = cfg.OriginIPv6
+	}
+	if origin != "" {
 		go loop(s.StreamingIntervalMS, func() {
-			emit(probe.Streaming(proxy, cfg.Origin, s.StreamingBytes, streamTimeout))
+			emit(probe.Streaming(proxy, origin, s.StreamingBytes, streamTimeout))
 		})
 		go loop(s.LargeObjectIntervalMS, func() {
-			emit(probe.LargeObject(proxy, cfg.Origin, s.LargeObjectBytes, timeout))
+			emit(probe.LargeObject(proxy, origin, s.LargeObjectBytes, timeout))
 		})
 		go loop(s.HifreqIntervalMS, func() {
-			emit(probe.HifreqSmall(proxy, cfg.Origin, s.HifreqCount, timeout)...)
+			emit(probe.HifreqSmall(proxy, origin, s.HifreqCount, timeout)...)
 		})
 		go loop(s.LongSessionIntervalMS, func() {
-			emit(probe.LongSession(proxy, cfg.Origin, s.LongSessionHoldMS, timeout))
+			emit(probe.LongSession(proxy, origin, s.LongSessionHoldMS, timeout))
 		})
 	}
 }
