@@ -72,6 +72,12 @@ mk_unit flashproxy-website "/opt/flashproxy/website -config=/opt/flashproxy/conf
 %{ endif ~}
 
 systemctl daemon-reload
-%{ if run_origin ~}systemctl enable --now flashproxy-origin%{ endif ~}
-%{ if run_worker ~}systemctl enable --now flashproxy-worker%{ endif ~}
-%{ if run_website ~}systemctl enable --now flashproxy-website%{ endif ~}
+%{ if run_origin ~}
+systemctl enable --now flashproxy-origin
+%{ endif ~}
+%{ if run_worker ~}
+systemctl enable --now flashproxy-worker
+%{ endif ~}
+%{ if run_website ~}
+systemctl enable --now flashproxy-website
+%{ endif ~}
