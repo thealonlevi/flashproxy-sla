@@ -60,10 +60,12 @@ JSON
 # Origins for payload scenarios = this instance's own origin on :8080.
 # v4 = public IPv4 (the EIP); v6 = the instance's public IPv6, so ipv6-egress
 # packages can reach it. Both come from IMDS.
-PUBIP=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+TOK=$(curl -s --max-time 5 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
+IMDS="curl -s --max-time 5 -H X-aws-ec2-metadata-token:$${TOK} http://169.254.169.254/latest/meta-data"
+PUBIP=$($${IMDS}/public-ipv4 || true)
 sed -i "s|__ORIGIN__|$${PUBIP}:8080|" /opt/flashproxy/config/worker.json
-MAC=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/network/interfaces/macs/ | head -1 | tr -d /)
-PUB6=$(curl -s --max-time 5 http://169.254.169.254/latest/meta-data/network/interfaces/macs/$${MAC}/ipv6s | head -1)
+MAC=$($${IMDS}/network/interfaces/macs/ | head -1 | tr -d /)
+PUB6=$($${IMDS}/network/interfaces/macs/$${MAC}/ipv6s | head -1)
 if [ -n "$${PUB6}" ]; then
   sed -i "s|__ORIGIN6__|[$${PUB6}]:8080|" /opt/flashproxy/config/worker.json
 else
