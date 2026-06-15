@@ -401,7 +401,7 @@ type idxData struct {
 	OverallLabel  string
 	Updated       string
 	Products      []idxProduct
-	JSONLD        template.HTML
+	JSONLD        template.JS
 }
 
 // jsonLD is the schema.org structured data (Organization + WebSite + FAQPage) for
@@ -424,7 +424,7 @@ var statusLabel = map[string]string{
 
 // buildIndex computes a current snapshot (best vantage per product) for SSR.
 func (s *server) buildIndex(r *http.Request) idxData {
-	d := idxData{SiteURL: s.cfg.SiteURL, OverallStatus: "no_data", OverallLabel: "Awaiting Data", Updated: "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"), JSONLD: template.HTML(jsonLD)}
+	d := idxData{SiteURL: s.cfg.SiteURL, OverallStatus: "no_data", OverallLabel: "Awaiting Data", Updated: "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"), JSONLD: template.JS(jsonLD)}
 	cur, err := slo.FetchByVantage(r.Context(), s.ch, s.cfg.ClickHouse.DB, s.cfg.SLO)
 	if err != nil {
 		return d
