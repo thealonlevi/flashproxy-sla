@@ -1,0 +1,57 @@
+#!/bin/bash
+set -euxo pipefail
+
+# Install Docker
+apt-get update -y
+apt-get install -y docker.io
+systemctl enable --now docker
+
+mkdir -p /opt/flashproxy/config
+
+# --- worker config (probes the 5 plans, writes to ClickHouse via the writer role) ---
+%{ if run_worker ~}
+cat > /opt/flashproxy/config/worker.json <<JSON
+{
+  "vantage": "${vantage}",
+  "timeout_ms": 10000,
+  "monitor": ${run_website},
+  "clickhouse": { "url": "${ch_url}", "db": "sla", "user": "flashproxy-status-worker", "password": "${ch_worker_password}" },
+  "slo": { "connect_ms_median_warn": 120, "connect_ms_median_crit": 400, "success_pct_warn": 98.0, "success_pct_crit": 90.0, "stale_seconds": 120 },
+  "targets": $(python3 - <<'PY'
+import json
+plans = json.loads('${proxy_urls_json}')
+ipv6 = {"ipv6","ipv6-datacenter"}
+print(json.dumps([
+  {"package":p,"proxy_url":u,"connect_target":"www.google.com:443","origin_get":"",
+   "ip_version": 6 if p in ipv6 else 4, "interval_ms":10000}
+  for p,u in plans.items()
+]))
+PY
+)
+}
+JSON
+docker run -d --restart=always --name worker \
+  -v /opt/flashproxy/config/worker.json:/app/config/worker.json:ro \
+  ${image_ref} /app/worker -config=/app/config/worker.json
+%{ endif ~}
+
+# --- origin (deterministic upstream the workers target) ---
+%{ if run_origin ~}
+docker run -d --restart=always --name origin -p 8080:8080 ${image_ref} /app/origin -addr=:8080
+%{ endif ~}
+
+# --- website (read-only; serves the public status page) ---
+%{ if run_website ~}
+cat > /opt/flashproxy/config/website.json <<JSON
+{
+  "listen": "0.0.0.0:80",
+  "web_dir": "/app/web",
+  "clickhouse": { "url": "${ch_url}", "db": "sla", "user": "flashproxy-status-website", "password": "${ch_website_password}" },
+  "public_clickhouse": { "url": "${ch_url}", "db": "sla", "user": "flashproxy-status-public", "password": "flashproxy-public-ro", "note": "Read-only, 500 concurrent queries. Published so anyone can reproduce this dashboard." },
+  "slo": { "connect_ms_median_warn": 120, "connect_ms_median_crit": 400, "success_pct_warn": 98.0, "success_pct_crit": 90.0, "stale_seconds": 120 }
+}
+JSON
+docker run -d --restart=always --name website -p 80:80 \
+  -v /opt/flashproxy/config/website.json:/app/config/website.json:ro \
+  ${image_ref} /app/website -config=/app/config/website.json
+%{ endif ~}

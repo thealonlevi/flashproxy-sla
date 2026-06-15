@@ -1,0 +1,24 @@
+# Built binaries
+/bin/
+/out/
+origin
+collector
+prober
+worker
+website
+
+# Real (non-example) configs — secrets / live endpoints.
+# Only *.example.json is committed.
+/config/*.json
+!/config/*.example.json
+*.local.json
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# terraform
+*.tfvars
+.terraform/
+*.tfstate*
