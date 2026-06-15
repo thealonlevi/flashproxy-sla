@@ -6,9 +6,13 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y git ca-certificates curl
 
-# Go toolchain
+# Go toolchain. cloud-init runs as root with no $HOME, so Go has nowhere for its
+# build cache — set HOME/GOCACHE explicitly.
 curl -fsSL https://go.dev/dl/go1.25.0.linux-${go_arch}.tar.gz | tar -C /usr/local -xz
 GO=/usr/local/go/bin/go
+export HOME=/root
+export GOCACHE=/root/.cache/go-build
+export GOPATH=/root/go
 
 mkdir -p /opt/flashproxy/config
 git clone --depth 1 --branch ${git_ref} ${repo_url} /opt/flashproxy/src
