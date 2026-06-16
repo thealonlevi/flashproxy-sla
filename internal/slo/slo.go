@@ -5,17 +5,17 @@
 // The definitions mirror the SLA contract (web/sla.html.tmpl §2) EXACTLY, and are
 // CROSS-VANTAGE — a package's verdict reduces over all of its vantages:
 //   - Available  : the connect scenario succeeds (CONNECT -> 200) from at least
-//                  one vantage.
+//     one vantage.
 //   - Down       : a minute in which the package is unavailable from ALL vantages
-//                  simultaneously (connect success% < DownSuccessPct at every
-//                  vantage). A single-vantage failure is NOT Down — it isolates one
-//                  network path, not the proxy.
+//     simultaneously (connect success% < DownSuccessPct at every
+//     vantage). A single-vantage failure is NOT Down — it isolates one
+//     network path, not the proxy.
 //   - Degraded   : Available, but the best (lowest-latency available) vantage's
-//                  AVERAGE connect latency exceeds DegradedAvgMs for DegradedForMin
-//                  CONSECUTIVE minutes, and stays Degraded until the average
-//                  recovers at/below the threshold. The run-up minutes before the
-//                  threshold is met are not yet Degraded ("for N consecutive
-//                  minutes" is a trigger, evaluated non-retroactively).
+//     AVERAGE connect latency exceeds DegradedAvgMs for DegradedForMin
+//     CONSECUTIVE minutes, and stays Degraded until the average
+//     recovers at/below the threshold. The run-up minutes before the
+//     threshold is met are not yet Degraded ("for N consecutive
+//     minutes" is a trigger, evaluated non-retroactively).
 //   - Impact     : Down minutes + ½ × Degraded minutes (½-weight).
 //   - Availability% = (minutes_with_data − Impact) / minutes_with_data × 100.
 //
@@ -230,30 +230,6 @@ func rollupSeries(byMinute map[int64]Minute, grid []int64, now int64, s SLO) Van
 	return VantageRollup{Current: cur, Bars: bars, UptimePct: uptime}
 }
 
-// Rollup returns, per package (sorted), the per-vantage rollups over windowMin. This
-// is THE shared implementation of the SLA's status + uptime accounting, used by the
-// website (bars/banner) and reduced by Fetch for the monitor.
-func Rollup(ctx context.Context, ch *chstore.Client, db string, windowMin int, s SLO) (map[string][]VantageRollup, []string, error) {
-	s = s.withDefaults()
-	data, err := fetchMinutes(ctx, ch, db, windowMin)
-	if err != nil {
-		return nil, nil, err
-	}
-	now := time.Now()
-	grid := Grid(now, windowMin)
-	out := map[string][]VantageRollup{}
-	pkgs := sortedKeys(data)
-	for _, pkg := range pkgs {
-		for _, van := range sortedKeys(data[pkg]) {
-			vr := rollupSeries(data[pkg][van], grid, now.Unix(), s)
-			vr.Vantage = van
-			vr.Current.Package, vr.Current.Vantage = pkg, van
-			out[pkg] = append(out[pkg], vr)
-		}
-	}
-	return out, pkgs, nil
-}
-
 // fetchMinutes pulls the per-(package, vantage) minute series for the window.
 func fetchMinutes(ctx context.Context, ch *chstore.Client, db string, windowMin int) (map[string]map[string]map[int64]Minute, error) {
 	rows, err := ch.QueryJSON(ctx, MinutesSQL(db, windowMin))
@@ -278,22 +254,6 @@ func fetchMinutes(ctx context.Context, ch *chstore.Client, db string, windowMin 
 	return out, nil
 }
 
-// FetchByVantage returns the current status per (package, vantage).
-func FetchByVantage(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status, error) {
-	s = s.withDefaults()
-	rollups, pkgs, err := Rollup(ctx, ch, db, s.DegradedForMin+5, s)
-	if err != nil {
-		return nil, err
-	}
-	var out []Status
-	for _, pkg := range pkgs {
-		for _, vr := range rollups[pkg] {
-			out = append(out, vr.Current)
-		}
-	}
-	return out, nil
-}
-
 // PackageRollup is the CROSS-VANTAGE rollup for one package. A minute is Down only
 // when the package is unavailable from EVERY vantage at once — a failure from a
 // single vantage (e.g. one region's network path) is NOT Down. Degraded uses the
@@ -311,10 +271,15 @@ type PackageRollup struct {
 	Vantages     []VantageRollup
 }
 
-// rollupPackageSeries reduces all vantages of one package to a single cross-vantage
-// minute series — available-anywhere ⇒ up (success 100), unavailable-everywhere ⇒
-// down (success 0), with the best available vantage's avg driving Degraded — then
-// classifies it with the consecutive rule. Per-vantage detail is kept for the UI.
+// rollupPackageSeries computes the package's authoritative CROSS-VANTAGE rollup plus
+// the per-vantage detail for the UI.
+//
+// The latency-Degraded threshold is applied ONLY to the home (lowest-latency
+// available) vantage each minute. A vantage measuring a product cross-region has a
+// geographic latency floor (e.g. ~200 ms EU→US) that would always exceed the 50 ms
+// threshold — so non-home vantages are classified on AVAILABILITY only (reachable ⇒
+// operational), never falsely "degraded". This matches the SLA, where Degraded is a
+// best-vantage concept. Down still requires unavailable-everywhere.
 func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, now int64, s SLO) PackageRollup {
 	s = s.withDefaults()
 	vans := make([]string, 0, len(byVantage))
@@ -323,15 +288,8 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 	}
 	sort.Strings(vans)
 
-	detail := make([]VantageRollup, 0, len(vans))
-	for _, v := range vans {
-		vr := rollupSeries(byVantage[v], grid, now, s)
-		vr.Vantage = v
-		vr.Current.Package, vr.Current.Vantage = "", v
-		detail = append(detail, vr)
-	}
-
-	// Collapse vantages to one synthetic per-minute series.
+	// 1) Collapse to one synthetic per-minute series (available-anywhere ⇒ up; the
+	//    best available avg drives Degraded) and record the home vantage each minute.
 	synth := make(map[int64]Minute, len(grid))
 	bestVanAt := make(map[int64]string, len(grid))
 	for _, t := range grid {
@@ -345,7 +303,7 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 			}
 			hasData = true
 			samples += m.Samples
-			if m.SuccessPct >= s.DownSuccessPct { // this vantage is available this minute
+			if m.SuccessPct >= s.DownSuccessPct { // available from this vantage this minute
 				if !availAny || m.ConnectMsAvg < bestAvg {
 					bestAvg, bestVan = m.ConnectMsAvg, v
 				}
@@ -363,13 +321,68 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 		bestVanAt[t] = bestVan
 	}
 
+	// Package verdict + bars: Degraded on the home-vantage latency (consecutive rule).
 	cross := rollupSeries(synth, grid, now, s)
+	crossAt := make(map[int64]string, len(cross.Bars))
+	for _, b := range cross.Bars {
+		crossAt[b.T] = b.Status
+	}
 	bestVan := ""
-	for _, t := range grid { // best vantage at the most recent data minute (headline)
+	for _, t := range grid { // home vantage at the most recent data minute (headline)
 		if _, ok := synth[t]; ok {
 			bestVan = bestVanAt[t]
 		}
 	}
+
+	// 2) Per-vantage detail: the home vantage mirrors the package verdict (may be
+	//    Degraded); every other vantage is availability-only, so cross-region latency
+	//    never reads as degradation.
+	detail := make([]VantageRollup, 0, len(vans))
+	for _, v := range vans {
+		bars := make([]Bar, len(grid))
+		var withData, down, deg int
+		var lastT int64 = -1
+		cur := Status{Status: "no_data", Vantage: v}
+		for i, t := range grid {
+			m, ok := byVantage[v][t]
+			st := "no_data"
+			if ok {
+				switch {
+				case m.SuccessPct < s.DownSuccessPct:
+					st = "down"
+				case bestVanAt[t] == v:
+					st = crossAt[t] // home vantage: full verdict (may be degraded)
+				default:
+					st = "operational" // reachable but not the home vantage ⇒ not degraded
+				}
+				withData++
+				lastT = t
+				switch st {
+				case "down":
+					down++
+				case "degraded":
+					deg++
+				}
+				cur = Status{Status: st, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples, Vantage: v}
+			}
+			bars[i] = Bar{T: t, Status: st, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
+		}
+		if lastT < 0 {
+			cur.AgeSeconds = now - grid[0]
+		} else {
+			cur.AgeSeconds = now - lastT
+			if cur.AgeSeconds > s.StaleSeconds {
+				cur.Status = "no_data"
+			}
+		}
+		uptime := 100.0
+		if withData > 0 {
+			uptime = (float64(withData) - float64(down) - 0.5*float64(deg)) / float64(withData) * 100
+			uptime = float64(int(uptime*100+0.5)) / 100
+		}
+		detail = append(detail, VantageRollup{Vantage: v, Current: cur, Bars: bars, UptimePct: uptime})
+	}
+
 	return PackageRollup{
 		Status: cross.Current.Status, BestVantage: bestVan,
 		ConnectMsAvg: cross.Current.ConnectMsAvg, SuccessPct: cross.Current.SuccessPct,

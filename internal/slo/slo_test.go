@@ -152,6 +152,58 @@ func TestCrossVantageDownRequiresAll(t *testing.T) {
 	}
 }
 
+// TestNonHomeVantageNotDegraded: a far vantage measuring a product cross-region (high
+// latency but reachable) must NOT be labeled degraded — only the home (lowest-latency)
+// vantage's latency feeds the Degraded verdict.
+func TestNonHomeVantageNotDegraded(t *testing.T) {
+	now := int64(1_700_000_000)
+	now -= now % 60
+	grid := make([]int64, 8)
+	for i := range grid {
+		grid[i] = now - int64(7-i)*60
+	}
+	bv := map[string]map[int64]Minute{"us": {}, "eu": {}}
+	for _, tt := range grid {
+		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 4, SuccessPct: 100, Samples: 10}   // home, fast
+		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 100, Samples: 10} // cross-region, far
+	}
+	pr := rollupPackageSeries(bv, grid, now+10, testSLO)
+	if pr.Status != "operational" {
+		t.Fatalf("package should be operational (home=4ms), got %s", pr.Status)
+	}
+	byVan := map[string]VantageRollup{}
+	for _, v := range pr.Vantages {
+		byVan[v.Vantage] = v
+	}
+	if byVan["eu"].Current.Status != "operational" {
+		t.Fatalf("far EU vantage (200ms, reachable) must be operational, got %s", byVan["eu"].Current.Status)
+	}
+	if byVan["eu"].UptimePct != 100 {
+		t.Fatalf("far vantage uptime should be 100 (not degraded), got %v", byVan["eu"].UptimePct)
+	}
+	if byVan["us"].Current.Status != "operational" {
+		t.Fatalf("home US vantage should be operational, got %s", byVan["us"].Current.Status)
+	}
+
+	// Genuine degradation: home vantage itself slow (>50ms) for the whole window ->
+	// home vantage AND package degraded; far vantage still operational.
+	for _, tt := range grid {
+		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 80, SuccessPct: 100, Samples: 10}
+	}
+	pr = rollupPackageSeries(bv, grid, now+10, testSLO)
+	if pr.Status != "degraded" {
+		t.Fatalf("home vantage 80ms sustained -> package degraded, got %s", pr.Status)
+	}
+	for _, v := range pr.Vantages {
+		if v.Vantage == "us" && v.Current.Status != "degraded" {
+			t.Fatalf("home US vantage should be degraded, got %s", v.Current.Status)
+		}
+		if v.Vantage == "eu" && v.Current.Status != "operational" {
+			t.Fatalf("far EU vantage should stay operational, got %s", v.Current.Status)
+		}
+	}
+}
+
 func TestOverallWorstWins(t *testing.T) {
 	if s, _ := Overall([]string{"operational", "degraded", "operational"}); s != "degraded" {
 		t.Fatalf("got %s", s)
