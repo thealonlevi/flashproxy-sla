@@ -2,20 +2,27 @@
 // uptime) and the worker's monitor (firing alerts) — so both judge "operational /
 // degraded / down / no_data" identically, and identically to the published SLA.
 //
-// The definitions mirror the SLA contract (web/sla.html.tmpl §2) EXACTLY:
-//   - Available  : the connect scenario succeeds (CONNECT -> 200).
-//   - Down       : a minute whose connect success rate is below DownSuccessPct.
-//   - Degraded   : Available, but the best (lowest-latency) vantage's AVERAGE
-//     connect latency exceeds DegradedAvgMs for DegradedForMin
-//     CONSECUTIVE minutes, and stays Degraded until the average
-//     recovers at/below the threshold. The run-up minutes before the
-//     threshold is met are not yet Degraded ("for N consecutive
-//     minutes" is a trigger, evaluated non-retroactively).
+// The definitions mirror the SLA contract (web/sla.html.tmpl §2) EXACTLY, and are
+// CROSS-VANTAGE — a package's verdict reduces over all of its vantages:
+//   - Available  : the connect scenario succeeds (CONNECT -> 200) from at least
+//                  one vantage.
+//   - Down       : a minute in which the package is unavailable from ALL vantages
+//                  simultaneously (connect success% < DownSuccessPct at every
+//                  vantage). A single-vantage failure is NOT Down — it isolates one
+//                  network path, not the proxy.
+//   - Degraded   : Available, but the best (lowest-latency available) vantage's
+//                  AVERAGE connect latency exceeds DegradedAvgMs for DegradedForMin
+//                  CONSECUTIVE minutes, and stays Degraded until the average
+//                  recovers at/below the threshold. The run-up minutes before the
+//                  threshold is met are not yet Degraded ("for N consecutive
+//                  minutes" is a trigger, evaluated non-retroactively).
 //   - Impact     : Down minutes + ½ × Degraded minutes (½-weight).
 //   - Availability% = (minutes_with_data − Impact) / minutes_with_data × 100.
 //
-// These thresholds are published at /api/meta so the verdict is reproducible from
-// data alone — not just from this source.
+// RollupPackages()/Fetch are the authoritative cross-vantage path; rollupSeries/
+// Rollup/Evaluator are the per-vantage building blocks they reduce, and Eval is the
+// instant single-minute classifier. Thresholds are published at /api/meta so the
+// verdict is reproducible from data alone — not just from this source.
 package slo
 
 import (

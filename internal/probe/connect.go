@@ -1,6 +1,7 @@
 // Package probe implements the synthetic scenarios: connect (the SLA headline),
-// streaming / large_object / hifreq_small / scraping / long_session, ping, and a
-// direct (no-proxy) baseline variant of each (suffix "_direct").
+// streaming / large_object / hifreq_small / scraping / long_session, net_rtt (a
+// stdlib TCP-connect RTT to the gateway, not ICMP), and a direct (no-proxy) baseline
+// variant of most (suffix "_direct"; net_rtt has no _direct form).
 package probe
 
 import (

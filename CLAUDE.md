@@ -78,16 +78,21 @@ Shared `internal/` packages:
   HTTP `CONNECT` tunnel (`connect_ms` = proxy upstream establishment); with `proxy==nil` it
   does a direct TCP dial (the baseline). Connect and body phases have separate timeouts;
   throughput is measured over the transfer window (first→last byte).
-- **`internal/slo`** — implements the **published SLA contract exactly**: best-vantage
+- **`internal/slo`** — implements the **published SLA contract exactly, CROSS-VANTAGE**: a
+  package is **Down only when ALL vantages are down that minute** (a single-vantage failure is
+  NOT Down — it isolates one network path, not the proxy); **Degraded** = best-vantage
   **average** connect-ms > `degraded_avg_ms` (50) for `degraded_for_min` (5) **consecutive**
-  minutes ⇒ Degraded; success < `down_success_pct` ⇒ Down; Availability% = (withData − Down −
-  ½·Degraded)/withData. `Rollup()` is the single shared implementation (bars + current status
-  + uptime); the website renders it and `Fetch`/`FetchByVantage` reduce it for the monitor.
-  Thresholds are published at `/api/meta` so the verdict is reproducible from data.
-- **`internal/chstore`** — stdlib-only ClickHouse HTTP client. Pins `session_timezone=UTC`,
-  bounds response size, returns errors (no silent truncation). `Num`/`Str`/**`NumU64`**
-  helpers: 64-bit ints arrive as JSON **strings** (precision) — use `NumU64` for UInt64,
-  never `Num`. Ledger inserts take a dedup token.
+  minutes; Availability% = (withData − Down − ½·Degraded)/withData. `RollupPackages()` is the
+  authoritative cross-vantage implementation — the banner, the monitor's `Fetch`, and the
+  uptime/credit accounting all derive from it; `rollupSeries`/`Rollup` are the per-vantage
+  building blocks it reduces. Thresholds published at `/api/meta` so the verdict is reproducible.
+- **`internal/chstore`** — stdlib-only ClickHouse HTTP client. **Sends NO client-set settings on
+  reads** — reader users are `readonly=1`, which rejects any setting with `Code 164: Cannot
+  modify '…' in readonly mode` and 502s the whole site (this caused an outage). Query caps and
+  cancel-on-disconnect live server-side on the reader *profiles*; timezone correctness relies on
+  the **server** being UTC, not a per-query `session_timezone`. Bounds response size, returns
+  errors (no silent truncation). `Num`/`Str`/**`NumU64`**: 64-bit ints arrive as JSON **strings**
+  — use `NumU64` for UInt64, never `Num`. Inserts (writer role, not readonly) take a dedup token.
 - **`internal/model`** — `ProbeResult` + `Event` and their **frozen `Canonical()`**
   serialization (the byte-exact form the ledger hashes and `cmd/verify` reproduces). Changing
   field order/format breaks verification of all historical data.
@@ -123,8 +128,9 @@ shortcuts this with a single `sla` admin user — production uses the three scop
   flusher inserts rows then the ledger entry (dedup-token idempotent) and only then advances
   the chain (`Chain.Build` → write → `Commit`). One writer per vantage. `model.Canonical()`
   is **frozen** — changing field order/format invalidates every historical hash.
-- **Timezone is UTC end-to-end.** Schema columns are `DateTime('UTC')` and the client pins
-  `session_timezone=UTC`; keep new timestamp columns/queries UTC.
+- **Timezone is UTC end-to-end, pinned on the SERVER (not per-query).** Columns are
+  `DateTime('UTC')` and ClickHouse runs `<timezone>UTC</timezone>`. The client must NOT send
+  `session_timezone` (or any setting) on reads — reader users are `readonly=1` and reject it.
 - **Numeric helpers:** keep most SQL outputs <64-bit (`toUInt32`, `round`) so they render as
   JSON numbers; for genuine UInt64 (`seq`, `bytes`) use `chstore.NumU64`, never `Num` (float
   precision loss past 2^53).
@@ -145,6 +151,31 @@ shortcuts this with a single `sla` admin user — production uses the three scop
   for the self-hosted ClickHouse: loopback bind, UTC timezone, `select_from_system_db_requires_grant`
   + query masking (so the published reader can't read `system.*`), the schema incl. the ledger,
   the scoped roles, exposed only via a Cloudflare tunnel at `ch.flashproxy.com`.
+
+### Operating the live fleet (hard-won)
+
+- **Instances build from source on boot (~5 min on `t4g.small`)** — slow and fragile (one bad
+  boot-script line aborts cloud-init silently and the unit never starts). `terraform apply
+  -replace=module.<region>.aws_instance.this` rebuilds a whole instance; the EIP re-attaches so
+  the public IP is stable, but that vantage is down during the rebuild. Apply a **saved reviewed
+  plan** (`terraform plan -replace … -out`, then `apply <plan>`) — blind `-auto-approve` on prod
+  is blocked. **Baking an AMI** removes the slow/fragile boot — the recurring real fix.
+- **Faster than a replace: in-place binary redeploy.** Break-glass SSH key is
+  `~/.ssh/flashproxy-sla` (matches tfvars `ssh_public_key`, comment `flashproxy-sla-breakglass`).
+  On the box: `cd /opt/flashproxy/src && git fetch && git checkout <sha> && CGO_ENABLED=0
+  /usr/local/go/bin/go build -trimpath -o /opt/flashproxy/<bin> ./cmd/<bin> && systemctl restart
+  flashproxy-<unit>`. Only that unit blips. (Replacing an instance changes its SSH host key —
+  clear the stale `known_hosts` entry; same EIP.)
+- **Migrate ClickHouse BEFORE deploying new binaries.** Admin is loopback-only on the CH box, so
+  migrations (`deploy/migrations/*.sql`, additive/online ALTERs) run THERE, not from a dev box.
+  The new worker reads `sla.ledger` / writes `stream`,`seq` on startup → it **crash-loops** on an
+  un-migrated schema. (Old code is forward-compatible with the migrated schema, so migrate first
+  is always safe.) Note: existing MergeTree sort keys can't be ALTERed (e.g. adding `vantage`),
+  so the live table keeps its old `ORDER BY` — that's only a pruning optimization.
+- **Truncating / resetting data:** STOP the workers → `TRUNCATE` → START the workers. The chain
+  head (next `seq` + prev `entry_hash`) lives in worker memory, so truncating under a running
+  worker leaves the new ledger starting mid-chain and `cmd/verify` reports a break. A restart
+  re-runs `resumeChain`, sees an empty ledger, and re-seeds from seq 1.
 
 ## Sibling repos
 

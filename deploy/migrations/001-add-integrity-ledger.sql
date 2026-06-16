@@ -12,6 +12,11 @@
 --     < deploy/migrations/001-add-integrity-ledger.sql
 -- (or send one statement per HTTP request to the loopback admin endpoint)
 
+-- NOTE: this migration intentionally does NOT create sla.probe_1m. That rollup is
+-- defined in schema/clickhouse.sql for FRESH installs only; no code reads it (all
+-- queries hit probe_raw directly), so a migrated prod box simply won't have it. That
+-- divergence from the canonical schema is expected and harmless.
+
 -- 1) New append-only ledger tables ------------------------------------------
 CREATE TABLE IF NOT EXISTS sla.ledger
 (
@@ -56,10 +61,12 @@ ALTER TABLE sla.events    MODIFY TTL ts + INTERVAL 400 DAY;
 -- 4) Make retried inserts idempotent (dedup by insert_deduplication_token) ----
 ALTER TABLE sla.probe_raw MODIFY SETTING non_replicated_deduplication_window = 1000;
 
--- 5) OPTIONAL: pin ts to UTC display. The app already pins session_timezone=UTC on
---    every query/insert and the server <timezone> should be UTC, so this is only
---    belt-and-suspenders. ts is in probe_raw's sort key; if the server rejects
---    MODIFY on a key column, SKIP these two lines (correctness holds without them).
+-- 5) OPTIONAL: pin ts to UTC display. The server runs <timezone>UTC</timezone> and
+--    columns are DateTime('UTC'), so this is only belt-and-suspenders. NOTE: the app
+--    does NOT send session_timezone on reads — reader users are readonly=1 and reject
+--    any client-set setting (Code 164); correctness relies on the server being UTC.
+--    ts is in probe_raw's sort key; if the server rejects MODIFY on a key column,
+--    SKIP these two lines (correctness holds without them).
 -- ALTER TABLE sla.probe_raw MODIFY COLUMN ts DateTime('UTC');
 -- ALTER TABLE sla.events    MODIFY COLUMN ts DateTime('UTC');
 
