@@ -66,6 +66,7 @@ type server struct {
 	ch      *chstore.Client
 	tmpl    *template.Template
 	slaTmpl *template.Template
+	incTmpl *template.Template
 	static  http.Handler
 
 	readyMu sync.Mutex
@@ -83,6 +84,7 @@ func main() {
 		ch:      chstore.New(cfg.ClickHouse.URL, cfg.ClickHouse.DB, cfg.ClickHouse.User, cfg.ClickHouse.Password),
 		tmpl:    template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "index.html.tmpl"))),
 		slaTmpl: template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "sla.html.tmpl"))),
+		incTmpl: template.Must(template.ParseFiles(filepath.Join(cfg.WebDir, "incidents.html.tmpl"))),
 		static:  http.FileServer(http.Dir(cfg.WebDir)),
 	}
 
@@ -100,6 +102,7 @@ func main() {
 	mux.HandleFunc("/sitemap.xml", s.handleSitemap)
 	mux.HandleFunc("/llms.txt", s.handleLLMs)
 	mux.HandleFunc("/sla", s.handleSLA)
+	mux.HandleFunc("/incidents", s.handleIncidents)
 	mux.HandleFunc("/", s.handleRoot) // SSR for "/", static for everything else
 
 	srv := &http.Server{
@@ -502,6 +505,170 @@ func (s *server) handleSLA(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// --- Past incidents (human-facing downtime/degradation history) ---
+
+type incidentView struct {
+	Package       string
+	Severity      string // "down" | "degraded"
+	SeverityLabel string
+	Start         string // "2006-01-02 15:04 UTC"
+	End           string // formatted, or "ongoing"
+	Duration      string
+	Ongoing       bool
+}
+
+type incidentsData struct {
+	SiteURL    string
+	Updated    string
+	Incidents  []incidentView
+	Total      int
+	WindowDays int
+	JSONLD     template.JS
+}
+
+const incidentsJSONLD = `[
+{"@context":"https://schema.org","@type":"WebPage","name":"FlashProxy Status — Past Incidents","url":"https://status.flashproxy.com/incidents","description":"History of FlashProxy proxy downtime and degradation incidents, detected automatically by an open-source prober and committed to a public, signed, hash-chained integrity ledger."}
+]`
+
+// severityRank orders the non-operational states so an incident's badge reflects the
+// worst level it reached (a degraded window that escalated to down shows as down).
+func severityRank(s string) int {
+	switch s {
+	case "down":
+		return 2
+	case "degraded":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// transitionTo extracts the destination state from a status_change message, whose
+// frozen prefix is "<from> -> <to> (...)". Returns "" if the message isn't a
+// recognizable transition.
+func transitionTo(msg string) string {
+	i := strings.Index(msg, " -> ")
+	if i < 0 {
+		return ""
+	}
+	f := strings.Fields(msg[i+4:])
+	if len(f) == 0 {
+		return ""
+	}
+	return f[0]
+}
+
+func humanDur(sec int64) string {
+	if sec < 60 {
+		if sec < 1 {
+			sec = 1
+		}
+		return fmt.Sprintf("%ds", sec)
+	}
+	m := sec / 60
+	if m < 60 {
+		return fmt.Sprintf("%dm", m)
+	}
+	h := m / 60
+	m %= 60
+	if h < 24 {
+		if m > 0 {
+			return fmt.Sprintf("%dh %dm", h, m)
+		}
+		return fmt.Sprintf("%dh", h)
+	}
+	dd := h / 24
+	h %= 24
+	if h > 0 {
+		return fmt.Sprintf("%dd %dh", dd, h)
+	}
+	return fmt.Sprintf("%dd", dd)
+}
+
+// buildIncidents folds the raw status_change event stream into incident episodes: an
+// episode opens when a package first leaves "operational" and closes when it returns;
+// its severity is the worst state seen in between. no_data transitions are ignored
+// (a monitoring gap is not an outage). Still-open episodes are marked ongoing.
+func (s *server) buildIncidents(r *http.Request) incidentsData {
+	d := incidentsData{
+		SiteURL:    s.cfg.SiteURL,
+		Updated:    "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"),
+		WindowDays: 400, // matches the events-table TTL
+		JSONLD:     template.JS(incidentsJSONLD),
+	}
+	rows, err := s.ch.QueryJSON(r.Context(), fmt.Sprintf(
+		`SELECT toUInt32(toUnixTimestamp(ts)) AS t, package, message
+		 FROM %s.events WHERE type = 'status_change' ORDER BY ts ASC LIMIT 5000`,
+		s.cfg.ClickHouse.DB))
+	if err != nil {
+		log.Printf("buildIncidents: %v", err)
+		return d
+	}
+	type openInc struct {
+		start int64
+		worst string
+	}
+	type rawInc struct {
+		pkg        string
+		start, end int64
+		worst      string
+		ongoing    bool
+	}
+	open := map[string]*openInc{}
+	var incs []rawInc
+	for _, m := range rows {
+		pkg := chstore.Str(m, "package")
+		to := transitionTo(chstore.Str(m, "message"))
+		t := int64(chstore.Num(m, "t"))
+		switch {
+		case to == "operational":
+			if oi := open[pkg]; oi != nil {
+				incs = append(incs, rawInc{pkg: pkg, start: oi.start, end: t, worst: oi.worst})
+				delete(open, pkg)
+			}
+		case to == "down" || to == "degraded":
+			if oi := open[pkg]; oi != nil {
+				if severityRank(to) > severityRank(oi.worst) {
+					oi.worst = to
+				}
+			} else {
+				open[pkg] = &openInc{start: t, worst: to}
+			}
+		}
+		// to == "" or "no_data": ignore (gap, not an incident boundary)
+	}
+	now := time.Now().UTC().Unix()
+	for pkg, oi := range open {
+		incs = append(incs, rawInc{pkg: pkg, start: oi.start, end: now, worst: oi.worst, ongoing: true})
+	}
+	sort.Slice(incs, func(i, j int) bool { return incs[i].start > incs[j].start })
+	for _, in := range incs {
+		end := time.Unix(in.end, 0).UTC().Format("2006-01-02 15:04 MST")
+		if in.ongoing {
+			end = "ongoing"
+		}
+		d.Incidents = append(d.Incidents, incidentView{
+			Package:       in.pkg,
+			Severity:      in.worst,
+			SeverityLabel: statusLabel[in.worst],
+			Start:         time.Unix(in.start, 0).UTC().Format("2006-01-02 15:04 MST"),
+			End:           end,
+			Duration:      humanDur(in.end - in.start),
+			Ongoing:       in.ongoing,
+		})
+	}
+	d.Total = len(d.Incidents)
+	return d
+}
+
+func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	if err := s.incTmpl.Execute(w, s.buildIncidents(r)); err != nil {
+		log.Printf("render incidents: %v", err)
+	}
+}
+
 // handleReady is a readiness probe: it confirms ClickHouse is reachable (cached for
 // a few seconds so a load balancer polling it can't hammer the DB), so a degraded
 // instance is pulled out of rotation instead of serving 502s.
@@ -561,8 +728,9 @@ func (s *server) handleSitemap(w http.ResponseWriter, r *http.Request) {
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>%s/</loc><lastmod>%s</lastmod><changefreq>hourly</changefreq><priority>1.0</priority></url>
   <url><loc>%s/sla</loc><lastmod>%s</lastmod><changefreq>monthly</changefreq><priority>0.9</priority></url>
+  <url><loc>%s/incidents</loc><lastmod>%s</lastmod><changefreq>hourly</changefreq><priority>0.7</priority></url>
 </urlset>
-`, s.cfg.SiteURL, today, s.cfg.SiteURL, today)
+`, s.cfg.SiteURL, today, s.cfg.SiteURL, today, s.cfg.SiteURL, today)
 }
 
 func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {

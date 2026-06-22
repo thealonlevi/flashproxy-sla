@@ -38,6 +38,8 @@
       <span class="banner-text" id="banner-text">{{.OverallLabel}}</span>
     </div>
 
+    <nav class="subnav"><a href="/incidents">View past incidents &rarr;</a></nav>
+
     <section class="components" id="components">
       {{range .Products}}
       <div class="comp">
@@ -92,7 +94,7 @@
     </section>
 
     <footer class="foot">
-      synthetic probes · <a href="/sla" class="plain">100% Uptime SLA</a> · every value on this page was recorded by this open-source app ·
+      synthetic probes · <a href="/sla" class="plain">100% Uptime SLA</a> · <a href="/incidents" class="plain">past incidents</a> · every value on this page was recorded by this open-source app ·
       <a href="https://github.com/thealonlevi/flashproxy-sla">source</a>
     </footer>
   </div>
