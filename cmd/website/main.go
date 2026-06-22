@@ -19,10 +19,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/flashproxy/flashproxy-status/internal/chstore"
 	"github.com/flashproxy/flashproxy-status/internal/slo"
@@ -393,6 +395,41 @@ type idxData struct {
 	Updated       string
 	Products      []idxProduct
 	JSONLD        template.JS
+	VantageCount  int    // distinct vantages currently reporting
+	VantagesText  string // human list, e.g. "Ashburn, Dallas and Frankfurt"
+}
+
+// vantageList collects the distinct vantage labels currently in the data (aws-
+// prefix stripped, capitalized, sorted) and a human-readable join, so copy that
+// names the vantages stays accurate as the fleet changes — no hardcoded cities.
+func vantageList(prs []slo.PackageRollup) (int, string) {
+	seen := map[string]bool{}
+	var names []string
+	for _, pr := range prs {
+		for _, v := range pr.Vantages {
+			n := strings.TrimPrefix(v.Vantage, "aws-")
+			if n == "" || seen[n] {
+				continue
+			}
+			seen[n] = true
+			if r := []rune(n); len(r) > 0 { // capitalize first letter
+				r[0] = unicode.ToUpper(r[0])
+				n = string(r)
+			}
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	switch len(names) {
+	case 0:
+		return 0, "multiple regions"
+	case 1:
+		return 1, names[0]
+	case 2:
+		return 2, names[0] + " and " + names[1]
+	default:
+		return len(names), strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
+	}
 }
 
 const jsonLD = `[
@@ -439,6 +476,7 @@ func (s *server) buildIndex(r *http.Request) idxData {
 	if len(statuses) > 0 {
 		d.OverallStatus, d.OverallLabel = slo.Overall(statuses)
 	}
+	d.VantageCount, d.VantagesText = vantageList(prs)
 	return d
 }
 
@@ -531,7 +569,7 @@ func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	d := s.buildIndex(r)
 	fmt.Fprintf(w, "# FlashProxy Status\n\n")
-	fmt.Fprintf(w, "> Live uptime and latency for FlashProxy's proxy network, measured continuously by synthetic probes from multiple global vantage points (US and EU).\n\n")
+	fmt.Fprintf(w, "> Live uptime and latency for FlashProxy's proxy network, measured continuously by synthetic probes from %d global vantage points (%s).\n\n", d.VantageCount, d.VantagesText)
 	fmt.Fprintf(w, "Current overall status: %s (%s).\n\n", d.OverallLabel, d.Updated)
 	fmt.Fprintf(w, "## Products monitored\n\n")
 	for _, p := range d.Products {
