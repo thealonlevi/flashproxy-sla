@@ -515,6 +515,18 @@ type incidentView struct {
 	End           string // formatted, or "ongoing"
 	Duration      string
 	Ongoing       bool
+	// Optional operator-authored official statement (from sla.incident_statements,
+	// published via the internal dashboard). Empty when none is attached.
+	Statement   string
+	StatementBy string
+	StatementAt string // publish date, "2006-01-02"
+}
+
+// statementRow is one published, de-duplicated editorial statement.
+type statementRow struct {
+	pkg             string
+	start, end, pub int64
+	body, author    string
 }
 
 type incidentsData struct {
@@ -642,12 +654,13 @@ func (s *server) buildIncidents(r *http.Request) incidentsData {
 		incs = append(incs, rawInc{pkg: pkg, start: oi.start, end: now, worst: oi.worst, ongoing: true})
 	}
 	sort.Slice(incs, func(i, j int) bool { return incs[i].start > incs[j].start })
+	stmts := s.loadStatements(r.Context())
 	for _, in := range incs {
 		end := time.Unix(in.end, 0).UTC().Format("2006-01-02 15:04 MST")
 		if in.ongoing {
 			end = "ongoing"
 		}
-		d.Incidents = append(d.Incidents, incidentView{
+		v := incidentView{
 			Package:       in.pkg,
 			Severity:      in.worst,
 			SeverityLabel: statusLabel[in.worst],
@@ -655,10 +668,81 @@ func (s *server) buildIncidents(r *http.Request) incidentsData {
 			End:           end,
 			Duration:      humanDur(in.end - in.start),
 			Ongoing:       in.ongoing,
-		})
+		}
+		if st := bestStatement(stmts, in.pkg, in.start, in.end); st != nil {
+			v.Statement = st.body
+			v.StatementBy = st.author
+			if st.pub > 0 {
+				v.StatementAt = time.Unix(st.pub, 0).UTC().Format("2006-01-02")
+			}
+		}
+		d.Incidents = append(d.Incidents, v)
 	}
 	d.Total = len(d.Incidents)
 	return d
+}
+
+// loadStatements reads published, de-duplicated editorial statements. It is
+// best-effort: if the table is absent (pre-migration) or the query errors, it logs
+// and returns nil so the page still renders incidents without statements.
+func (s *server) loadStatements(ctx context.Context) []statementRow {
+	rows, err := s.ch.QueryJSON(ctx, fmt.Sprintf(
+		`SELECT package,
+		        toUInt32(toUnixTimestamp(argMax(period_start, updated_at))) AS pstart,
+		        toUInt32(toUnixTimestamp(argMax(period_end, updated_at)))   AS pend,
+		        argMax(body, updated_at)   AS body,
+		        argMax(author, updated_at) AS author,
+		        toUInt32(toUnixTimestamp(argMax(published_at, updated_at))) AS pub
+		 FROM %s.incident_statements
+		 GROUP BY dedupe_key, package
+		 HAVING body != ''`,
+		s.cfg.ClickHouse.DB))
+	if err != nil {
+		log.Printf("incident statements (non-fatal): %v", err)
+		return nil
+	}
+	out := make([]statementRow, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, statementRow{
+			pkg:    chstore.Str(m, "package"),
+			start:  int64(chstore.Num(m, "pstart")),
+			end:    int64(chstore.Num(m, "pend")),
+			body:   chstore.Str(m, "body"),
+			author: chstore.Str(m, "author"),
+			pub:    int64(chstore.Num(m, "pub")),
+		})
+	}
+	return out
+}
+
+// bestStatement returns the statement for pkg that overlaps [start,end] the most
+// (ties broken by most-recently published), or nil. The page's auto-detected
+// incidents and the dashboard's statements are derived independently, so matching is
+// by package + time overlap, tolerant of small start/end differences.
+func bestStatement(stmts []statementRow, pkg string, start, end int64) *statementRow {
+	var best *statementRow
+	bestOv := int64(-1)
+	for i := range stmts {
+		st := &stmts[i]
+		if st.pkg != pkg {
+			continue
+		}
+		lo, hi := start, end
+		if st.start > lo {
+			lo = st.start
+		}
+		if st.end < hi {
+			hi = st.end
+		}
+		ov := hi - lo // overlap length; negative => disjoint
+		if ov < 0 {
+			continue
+		}
+		if ov > bestOv || (ov == bestOv && best != nil && st.pub > best.pub) {
+			bestOv, best = ov, st
+		}
+	}
+	return best
 }
 
 func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {

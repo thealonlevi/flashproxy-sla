@@ -124,6 +124,15 @@ html, body {
   margin-top: 4px; color: var(--muted); font-size: 12px;
 }
 .inc-dur { white-space: nowrap; }
+.inc-statement {
+  margin-top: 10px; padding: 10px 12px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 3px;
+}
+.inc-statement p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--ink); }
+.inc-statement-by {
+  margin-top: 6px; font-size: 11px; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em;
+}
 .inc-note { color: var(--muted); font-size: 11px; margin: 12px 2px 0; }
 
 /* metrics panel */

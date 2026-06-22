@@ -46,6 +46,12 @@
           <span class="inc-when">{{.Start}} &rarr; {{.End}}</span>
           <span class="inc-dur">{{if .Ongoing}}ongoing &middot; {{end}}{{.Duration}}</span>
         </div>
+        {{if .Statement}}
+        <div class="inc-statement">
+          <p>{{.Statement}}</p>
+          <div class="inc-statement-by">Official statement{{if .StatementBy}} &middot; {{.StatementBy}}{{end}}{{if .StatementAt}} &middot; {{.StatementAt}}{{end}}</div>
+        </div>
+        {{end}}
       </div>
       {{end}}
     </section>

@@ -16,6 +16,7 @@
 #   CH_ADMIN_URL   (e.g. http://127.0.0.1:8123)
 #   CH_ADMIN_USER  CH_ADMIN_PASS   (an admin/access-management user)
 #   SLA_PUBLIC_PASSWORD  SLA_WEBSITE_PASSWORD  SLA_WORKER_PASSWORD
+#   SLA_STATEMENTS_PASSWORD   (narrow writer for the internal dashboard)
 set -euo pipefail
 unset HISTFILE 2>/dev/null || true
 set +o history 2>/dev/null || true
@@ -26,6 +27,7 @@ set +o history 2>/dev/null || true
 : "${SLA_PUBLIC_PASSWORD:?set SLA_PUBLIC_PASSWORD}"
 : "${SLA_WEBSITE_PASSWORD:?set SLA_WEBSITE_PASSWORD}"
 : "${SLA_WORKER_PASSWORD:?set SLA_WORKER_PASSWORD}"
+: "${SLA_STATEMENTS_PASSWORD:?set SLA_STATEMENTS_PASSWORD}"
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 roles_sql="$here/schema/roles.sql"

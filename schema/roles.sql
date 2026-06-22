@@ -3,12 +3,16 @@
 -- ${ENV} placeholders — substitute at bootstrap (see deploy/bootstrap-roles.sh,
 -- which keeps plaintext out of shell history and out of query_log).
 --
--- Three users, two roles:
---   sla_reader  -> SELECT on sla.* (incl. the integrity ledger)
---   sla_writer  -> SELECT + INSERT on sla.*
---   flashproxy-status-public  (reader, capped) -- PUBLISHED on the site
---   flashproxy-status-website (reader, capped) -- the site renders with this
---   flashproxy-status-worker  (writer)         -- prober VMs push results + ledger
+-- Four users, three roles:
+--   sla_reader            -> SELECT on sla.* (incl. the integrity ledger)
+--   sla_writer            -> SELECT + INSERT on sla.*
+--   sla_statements_writer -> SELECT + INSERT on sla.incident_statements ONLY
+--   flashproxy-status-public     (reader, capped) -- PUBLISHED on the site
+--   flashproxy-status-website    (reader, capped) -- the site renders with this
+--   flashproxy-status-worker     (writer)         -- prober VMs push results + ledger
+--   flashproxy-status-statements (narrow writer)  -- internal dashboard publishes
+--       official incident statements; intentionally CANNOT write probe_raw/events/
+--       ledger, so it can never forge a measurement — only editorial commentary.
 --
 -- IMPORTANT — system-table exposure: readonly=1 only blocks writes/DDL, NOT
 -- SELECTs from the `system` database. Since `flashproxy-status-public` is
@@ -32,6 +36,10 @@ GRANT SELECT ON sla.* TO sla_reader;
 
 CREATE ROLE IF NOT EXISTS sla_writer;
 GRANT SELECT, INSERT ON sla.* TO sla_writer;
+
+-- Narrow writer: editorial statements ONLY. Never probe_raw/events/ledger.
+CREATE ROLE IF NOT EXISTS sla_statements_writer;
+GRANT SELECT, INSERT ON sla.incident_statements TO sla_statements_writer;
 
 -- ---- settings profiles ----
 -- Public profile is internet-reachable, so it is bounded on EVERY axis: rows,
@@ -62,6 +70,9 @@ CREATE SETTINGS PROFILE IF NOT EXISTS sla_website SETTINGS
 CREATE SETTINGS PROFILE IF NOT EXISTS sla_worker SETTINGS
     max_concurrent_queries_for_user = 200;
 
+CREATE SETTINGS PROFILE IF NOT EXISTS sla_statements SETTINGS
+    max_concurrent_queries_for_user = 20;
+
 -- ---- users ----
 CREATE USER IF NOT EXISTS 'flashproxy-status-public'
     IDENTIFIED WITH sha256_password BY '${SLA_PUBLIC_PASSWORD}'
@@ -77,3 +88,9 @@ CREATE USER IF NOT EXISTS 'flashproxy-status-worker'
     IDENTIFIED WITH sha256_password BY '${SLA_WORKER_PASSWORD}'
     SETTINGS PROFILE 'sla_worker';
 GRANT sla_writer TO 'flashproxy-status-worker';
+
+-- Internal dashboard: publishes official incident statements only.
+CREATE USER IF NOT EXISTS 'flashproxy-status-statements'
+    IDENTIFIED WITH sha256_password BY '${SLA_STATEMENTS_PASSWORD}'
+    SETTINGS PROFILE 'sla_statements';
+GRANT sla_statements_writer TO 'flashproxy-status-statements';

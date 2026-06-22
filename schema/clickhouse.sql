@@ -61,6 +61,33 @@ ORDER BY ts
 TTL ts + INTERVAL 400 DAY;
 
 -- ===========================================================================
+-- Operator-authored incident statements (editorial — NOT a measurement).
+-- ===========================================================================
+-- Official, human-written explanations of an incident, published by staff via the
+-- internal dashboard (flash-staff-dash → sla_events.official_comment). Public-
+-- readable so the status page can show "what happened" beside an auto-detected
+-- incident. Deliberately OUTSIDE the integrity ledger: the ledger attests
+-- measurements; these are editorial commentary. Keyed by dedupe_key and matched to
+-- the page's incidents by (package + time overlap). ReplacingMergeTree(updated_at):
+-- re-saving a statement inserts a newer row that supersedes the old one (read with
+-- argMax/FINAL); an emptied body retracts it.
+CREATE TABLE IF NOT EXISTS sla.incident_statements
+(
+    dedupe_key   String,                    -- stable id from the dashboard: incident:<pkg>:<type>:<start>
+    package      LowCardinality(String),
+    event_type   LowCardinality(String),    -- 'down' | 'degraded'
+    period_start DateTime('UTC'),
+    period_end   DateTime('UTC'),
+    body         String,                    -- the official statement (empty = retracted)
+    author       String,
+    published_at DateTime('UTC'),
+    updated_at   DateTime('UTC') DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY dedupe_key
+TTL period_start + INTERVAL 400 DAY;
+
+-- ===========================================================================
 -- Append-only, hash-chained integrity ledger (tamper-evidence).
 -- ===========================================================================
 -- Each entry commits to a batch of rows (probe_raw rows for a flush, or one event)
