@@ -79,13 +79,17 @@ JSON
 # Origins for payload scenarios = this instance's own origin on :8080.
 # v4 = public IPv4 (the EIP); v6 = the instance's public IPv6, so ipv6-egress
 # packages can reach it. Both come from IMDS.
-TOK=$(curl -s --max-time 5 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
-IMDS="curl -s --max-time 5 -H X-aws-ec2-metadata-token:$${TOK} http://169.254.169.254/latest/meta-data"
+TOK=$(curl -fs --max-time 5 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)
+# -f so a 404 (e.g. no IPv6 on an IPv4-only Local Zone) yields EMPTY, not an XML
+# error body that would otherwise be mistaken for an address and corrupt the config.
+IMDS="curl -fs --max-time 5 -H X-aws-ec2-metadata-token:$${TOK} http://169.254.169.254/latest/meta-data"
 PUBIP=$($${IMDS}/public-ipv4 || true)
 # replace the v4 origin token everywhere (the "origin" field AND v4 connect targets)
 sed -i "s|__ORIGIN__|$${PUBIP}:8080|g" /opt/flashproxy/config/worker.json
 MAC=$($${IMDS}/network/interfaces/macs/ | head -1 | tr -d /)
-PUB6=$($${IMDS}/network/interfaces/macs/$${MAC}/ipv6s | head -1)
+PUB6=$($${IMDS}/network/interfaces/macs/$${MAC}/ipv6s 2>/dev/null | head -1)
+# only treat PUB6 as real if it actually looks like an IPv6 address (contains ':')
+case "$${PUB6}" in *:*) : ;; *) PUB6="" ;; esac
 if [ -n "$${PUB6}" ]; then
   sed -i "s|__ORIGIN6__|[$${PUB6}]:8080|g" /opt/flashproxy/config/worker.json
 else
