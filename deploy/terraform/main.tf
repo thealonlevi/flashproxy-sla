@@ -69,6 +69,9 @@ module "dallas" {
   availability_zone    = "us-east-1-dfw-2a"
   network_border_group = "us-east-1-dfw-2"
   enable_ipv6          = false
+  # v4-only Local Zone: ipv6-egress packages need a v6-reachable target, so borrow
+  # Ashburn's dual-stack origin over IPv6 (the proxy is still reached over IPv4).
+  origin_ipv6_override = "[${module.ashburn.public_ipv6}]:8080"
   repo_url             = var.repo_url
   git_ref              = var.git_ref
   ssh_public_key       = var.ssh_public_key

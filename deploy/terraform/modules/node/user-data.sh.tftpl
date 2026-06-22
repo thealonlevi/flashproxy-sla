@@ -86,17 +86,24 @@ IMDS="curl -fs --max-time 5 -H X-aws-ec2-metadata-token:$${TOK} http://169.254.1
 PUBIP=$($${IMDS}/public-ipv4 || true)
 # replace the v4 origin token everywhere (the "origin" field AND v4 connect targets)
 sed -i "s|__ORIGIN__|$${PUBIP}:8080|g" /opt/flashproxy/config/worker.json
-MAC=$($${IMDS}/network/interfaces/macs/ | head -1 | tr -d /)
-PUB6=$($${IMDS}/network/interfaces/macs/$${MAC}/ipv6s 2>/dev/null | head -1)
-# only treat PUB6 as real if it actually looks like an IPv6 address (contains ':')
-case "$${PUB6}" in *:*) : ;; *) PUB6="" ;; esac
-if [ -n "$${PUB6}" ]; then
-  sed -i "s|__ORIGIN6__|[$${PUB6}]:8080|g" /opt/flashproxy/config/worker.json
+OV6="${origin_ipv6_override}"
+if [ -n "$${OV6}" ]; then
+  # v4-only node (Local Zone): the v6-egress proxy can't reach our v4 origin, so use
+  # an explicit v6-reachable origin (a dual-stack node's IPv6) for ipv6 packages.
+  sed -i "s|__ORIGIN6__|$${OV6}|g" /opt/flashproxy/config/worker.json
 else
-  # No public IPv6: disable the v6 payload origin, and fall the v6 packages'
-  # connect_target back to the v4 origin so they still record a connect metric.
-  sed -i 's|"origin_ipv6": "__ORIGIN6__"|"origin_ipv6": ""|' /opt/flashproxy/config/worker.json
-  sed -i "s|__ORIGIN6__|$${PUBIP}:8080|g" /opt/flashproxy/config/worker.json
+  MAC=$($${IMDS}/network/interfaces/macs/ | head -1 | tr -d /)
+  PUB6=$($${IMDS}/network/interfaces/macs/$${MAC}/ipv6s 2>/dev/null | head -1)
+  # only treat PUB6 as real if it actually looks like an IPv6 address (contains ':')
+  case "$${PUB6}" in *:*) : ;; *) PUB6="" ;; esac
+  if [ -n "$${PUB6}" ]; then
+    sed -i "s|__ORIGIN6__|[$${PUB6}]:8080|g" /opt/flashproxy/config/worker.json
+  else
+    # No public IPv6 and no override: disable the v6 payload origin and fall the v6
+    # packages' connect_target back to the v4 origin so they still record something.
+    sed -i 's|"origin_ipv6": "__ORIGIN6__"|"origin_ipv6": ""|' /opt/flashproxy/config/worker.json
+    sed -i "s|__ORIGIN6__|$${PUBIP}:8080|g" /opt/flashproxy/config/worker.json
+  fi
 fi
 mk_unit flashproxy-worker "/opt/flashproxy/worker -config=/opt/flashproxy/config/worker.json"
 %{ endif ~}

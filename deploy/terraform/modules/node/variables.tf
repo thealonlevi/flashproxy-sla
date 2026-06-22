@@ -38,6 +38,15 @@ variable "enable_ipv6" {
   type    = bool
   default = true
 }
+
+# For a node with no local IPv6 (Local Zone), the v6-reachable origin to use for
+# ipv6-egress packages, e.g. "[<dual-stack-node-v6>]:8080". Empty => use the local
+# origin (the normal dual-stack case). The proxy is reached over IPv4 either way;
+# this is only the target the proxy egresses to over IPv6.
+variable "origin_ipv6_override" {
+  type    = string
+  default = ""
+}
 variable "go_version" {
   type    = string
   default = "1.25.0"

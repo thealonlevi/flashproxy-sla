@@ -162,23 +162,24 @@ resource "aws_instance" "this" {
   user_data_replace_on_change = false
 
   user_data = templatefile("${path.module}/user-data.sh.tftpl", {
-    repo_url            = var.repo_url
-    git_ref             = var.git_ref
-    go_arch             = var.go_arch
-    go_version          = var.go_version
-    go_sha256           = var.go_sha256
-    vantage             = var.vantage
-    run_website         = var.run_website
-    run_worker          = var.run_worker
-    run_origin          = var.run_origin
-    ch_url              = var.ch_url
-    ch_worker_password  = var.ch_worker_password
-    ch_website_password = var.ch_website_password
-    ledger_signing_key  = var.ledger_signing_key
-    ledger_pubkey       = var.ledger_pubkey
-    tls_cert            = var.tls_cert
-    tls_key             = var.tls_key
-    targets_json        = jsonencode(local.targets)
+    repo_url             = var.repo_url
+    git_ref              = var.git_ref
+    go_arch              = var.go_arch
+    go_version           = var.go_version
+    go_sha256            = var.go_sha256
+    vantage              = var.vantage
+    run_website          = var.run_website
+    run_worker           = var.run_worker
+    run_origin           = var.run_origin
+    ch_url               = var.ch_url
+    ch_worker_password   = var.ch_worker_password
+    ch_website_password  = var.ch_website_password
+    ledger_signing_key   = var.ledger_signing_key
+    ledger_pubkey        = var.ledger_pubkey
+    origin_ipv6_override = var.origin_ipv6_override
+    tls_cert             = var.tls_cert
+    tls_key              = var.tls_key
+    targets_json         = jsonencode(local.targets)
   })
 
   tags = { Name = var.name }
