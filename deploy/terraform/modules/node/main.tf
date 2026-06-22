@@ -7,14 +7,18 @@ terraform {
 locals {
   ipv6_pkgs = toset(["ipv6-residential", "ipv6-datacenter"])
   ami_arch  = var.go_arch == "amd64" ? "amd64" : "arm64" # match the AMI to the build arch
-  # The headline `connect` SLA metric targets our OWN deterministic origin (resolved
-  # at boot via the __ORIGIN__/__ORIGIN6__ placeholders), not a third-party site, so
-  # the number isn't polluted by Google/Cloudflare availability or per-IP blocking.
-  # (Third-party reachability is still measured separately by the `scraping` scenario.)
+  # The headline `connect` probe targets one of OUR deterministic origins (never a
+  # third-party site, so the number isn't polluted by external availability). The
+  # specific origin per package comes from var.package_targets — the origin nearest
+  # that package's PROXY — so response time isolates the proxy (see root main.tf).
+  # Unmapped packages fall back to the vantage-local origin (__ORIGIN__/__ORIGIN6__,
+  # resolved at boot). Third-party reachability is measured separately by `scraping`.
   targets = [for pkg, u in var.proxy_urls : {
-    package        = pkg
-    proxy_url      = u
-    connect_target = contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__"
+    package   = pkg
+    proxy_url = u
+    # connect_target = origin nearest THIS package's proxy (proxy-region origin); if
+    # not mapped, fall back to the vantage-local origin placeholder (resolved at boot).
+    connect_target = lookup(var.package_targets, pkg, contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__")
     origin_get     = "/connect"
     ip_version     = contains(local.ipv6_pkgs, pkg) ? 6 : 4
     interval_ms    = 10000

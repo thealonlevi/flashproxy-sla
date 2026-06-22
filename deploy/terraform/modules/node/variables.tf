@@ -47,6 +47,13 @@ variable "origin_ipv6_override" {
   type    = string
   default = ""
 }
+
+# package -> connect_target (the origin in that package's PROXY region, host:port).
+# Empty/unset packages fall back to the vantage-local origin placeholder.
+variable "package_targets" {
+  type    = map(string)
+  default = {}
+}
 variable "go_version" {
   type    = string
   default = "1.25.0"

@@ -2,6 +2,25 @@
 # public page). Frankfurt (eu-central-1) runs worker + origin (EU vantage for isp_eu).
 # Both workers write to the bare-metal ClickHouse via https://ch.flashproxy.com.
 
+locals {
+  # Each package's connect_target is the origin in that package's PROXY region, NOT
+  # the vantage's own origin — so response time isolates the proxy (vantage->proxy +
+  # proxy->co-located origin ~= vantage->proxy). Measured proxy homes: datacenter /
+  # isp / ipv6-* egress ~5ms from Ashburn (us-east); isp_eu ~5ms from Frankfurt (EU).
+  # EIPs are stable; the Ashburn v6 is the instance address — update it if the Ashburn
+  # node is replaced (or move these to stable DNS A/AAAA to fully decouple).
+  ashburn_v4   = "52.204.201.83:8080"
+  ashburn_v6   = "[2600:1f18:3322:9d01:d95c:17fe:e48a:3ea1]:8080"
+  frankfurt_v4 = "18.193.186.1:8080"
+  package_targets = {
+    "datacenter"       = local.ashburn_v4
+    "isp"              = local.ashburn_v4
+    "isp_eu"           = local.frankfurt_v4
+    "ipv6-datacenter"  = local.ashburn_v6
+    "ipv6-residential" = local.ashburn_v6
+  }
+}
+
 module "ashburn" {
   source    = "./modules/node"
   providers = { aws = aws.ashburn }
@@ -26,6 +45,7 @@ module "ashburn" {
   tls_cert            = var.tls_cert
   tls_key             = var.tls_key
   proxy_urls          = var.proxy_urls
+  package_targets     = local.package_targets
 }
 
 module "frankfurt" {
@@ -47,6 +67,7 @@ module "frankfurt" {
   ch_url             = var.ch_url
   ch_worker_password = var.ch_worker_password
   proxy_urls         = var.proxy_urls
+  package_targets    = local.package_targets
 }
 
 # Dallas, Texas — AWS Dallas Local Zone (us-east-1-dfw-2), which lives in the
@@ -84,6 +105,7 @@ module "dallas" {
   ch_url             = var.ch_url
   ch_worker_password = var.ch_worker_password
   proxy_urls         = var.proxy_urls
+  package_targets    = local.package_targets
 }
 
 output "ashburn_eip" {
