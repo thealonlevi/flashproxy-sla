@@ -49,12 +49,12 @@ module "frankfurt" {
   proxy_urls         = var.proxy_urls
 }
 
-# Dallas, Texas — AWS Dallas Local Zone (us-east-1-dfw-1), which lives in the
+# Dallas, Texas — AWS Dallas Local Zone (us-east-1-dfw-2), which lives in the
 # us-east-1 parent region. No Graviton in the Local Zone, so this is an x86 t3
 # instance (amd64 build) and IPv6 is off (Local Zones are IPv4-only). Worker +
 # origin only. PREREQUISITE: the Local Zone must be opted-in on the account:
 #   aws ec2 modify-availability-zone-group --region us-east-1 \
-#     --group-name us-east-1-dfw-1 --opt-in-status opted-in
+#     --group-name us-east-1-dfw-2 --opt-in-status opted-in
 module "dallas" {
   source    = "./modules/node"
   providers = { aws = aws.ashburn } # Local Zone is in the us-east-1 parent region
@@ -65,8 +65,8 @@ module "dallas" {
   go_arch              = "amd64"
   go_sha256            = "2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613" # go1.25.0 linux-amd64
   vpc_cidr             = "10.20.0.0/16"                                                     # distinct from ashburn's 10.10.0.0/16 (same region)
-  availability_zone    = "us-east-1-dfw-1a"
-  network_border_group = "us-east-1-dfw-1"
+  availability_zone    = "us-east-1-dfw-2a"
+  network_border_group = "us-east-1-dfw-2"
   enable_ipv6          = false
   repo_url             = var.repo_url
   git_ref              = var.git_ref
