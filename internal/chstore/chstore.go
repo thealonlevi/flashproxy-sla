@@ -215,8 +215,11 @@ func (c *Client) LedgerHeads(ctx context.Context) (map[string]struct {
 	Seq       uint64
 	EntryHash string
 }, error) {
+	// Alias the aggregate to head_seq, NOT seq: aliasing it `seq` shadows the column,
+	// so ClickHouse resolves the `seq` inside argMax(entry_hash, seq) to the alias
+	// (an aggregate) and rejects it as max() nested in argMax() (Code 184).
 	rows, err := c.QueryJSON(ctx, fmt.Sprintf(
-		"SELECT stream, toUInt64(max(seq)) AS seq, argMax(entry_hash, seq) AS entry_hash FROM %s.ledger GROUP BY stream",
+		"SELECT stream, toUInt64(max(seq)) AS head_seq, argMax(entry_hash, seq) AS entry_hash FROM %s.ledger GROUP BY stream",
 		c.db))
 	if err != nil {
 		return nil, err
@@ -229,7 +232,7 @@ func (c *Client) LedgerHeads(ctx context.Context) (map[string]struct {
 		out[Str(m, "stream")] = struct {
 			Seq       uint64
 			EntryHash string
-		}{NumU64(m, "seq"), Str(m, "entry_hash")}
+		}{NumU64(m, "head_seq"), Str(m, "entry_hash")}
 	}
 	return out, nil
 }
