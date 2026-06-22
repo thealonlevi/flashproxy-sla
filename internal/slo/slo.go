@@ -410,6 +410,68 @@ func RollupPackages(ctx context.Context, ch *chstore.Client, db string, windowMi
 	return out, nil
 }
 
+// Incident is one contiguous Down or Degraded window for a package, derived from the
+// cross-vantage minute classification. This is the SAME definition the credit engine
+// (flash-staff-dash internal SLA port) uses, so the public incident history and the
+// credit accounting identify each incident identically (same type, same window).
+type Incident struct {
+	Package string `json:"package"`
+	Type    string `json:"type"`  // "down" | "degraded"
+	Start   int64  `json:"start"` // unix, inclusive first impacted minute
+	End     int64  `json:"end"`   // unix, exclusive (last impacted minute + 60)
+	Minutes int    `json:"minutes"`
+}
+
+// IncidentsFromBars groups a package's classified minute Bars (already time-ordered)
+// into contiguous Down/Degraded windows. A direct→degraded (or vice-versa) transition
+// closes one incident and opens another; operational/no_data minutes end the current
+// one. Mirrors flash-staff-dash slo.ts rollupPackage's incident flush exactly so both
+// systems produce identical (type, start, end) for the same outage.
+func IncidentsFromBars(pkg string, bars []Bar) []Incident {
+	var incs []Incident
+	var curType string
+	var curStart, curEnd int64
+	flush := func() {
+		if curType != "" {
+			incs = append(incs, Incident{
+				Package: pkg, Type: curType,
+				Start: curStart, End: curEnd + 60,
+				Minutes: int((curEnd-curStart)/60) + 1,
+			})
+		}
+	}
+	for _, b := range bars {
+		if b.Status == "down" || b.Status == "degraded" {
+			if curType == b.Status {
+				curEnd = b.T
+			} else {
+				flush()
+				curType, curStart, curEnd = b.Status, b.T, b.T
+			}
+		} else if curType != "" {
+			flush()
+			curType = ""
+		}
+	}
+	flush()
+	return incs
+}
+
+// RollupIncidents enumerates every Down/Degraded incident across all packages over
+// the window, using the authoritative cross-vantage rollup — the same source and
+// algorithm as the live status and as the credit engine.
+func RollupIncidents(ctx context.Context, ch *chstore.Client, db string, windowMin int, s SLO) ([]Incident, error) {
+	prs, err := RollupPackages(ctx, ch, db, windowMin, s)
+	if err != nil {
+		return nil, err
+	}
+	var out []Incident
+	for _, pr := range prs {
+		out = append(out, IncidentsFromBars(pr.Package, pr.Bars)...)
+	}
+	return out, nil
+}
+
 // Fetch returns the current cross-vantage status per package (Down only when ALL
 // vantages are down). Used by the monitor.
 func Fetch(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status, error) {

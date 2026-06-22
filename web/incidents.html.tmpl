@@ -55,7 +55,7 @@
       </div>
       {{end}}
     </section>
-    <p class="inc-note">{{.Total}} incident{{if ne .Total 1}}s{{end}} on record &middot; events retained for {{.WindowDays}} days &middot; raw feed at <a href="/api/events">/api/events</a>.</p>
+    <p class="inc-note">{{.Total}} incident{{if ne .Total 1}}s{{end}} in the last {{.WindowDays}} days &middot; computed from the public probe data by the same cross-vantage rollup that drives SLA credits &middot; reproducible via <a href="/api/meta">/api/meta</a> + the public database.</p>
     {{else}}
     <div class="banner" data-status="operational">
       <span class="dot"></span>

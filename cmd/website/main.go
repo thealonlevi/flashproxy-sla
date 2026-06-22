@@ -542,34 +542,6 @@ const incidentsJSONLD = `[
 {"@context":"https://schema.org","@type":"WebPage","name":"FlashProxy Status — Past Incidents","url":"https://status.flashproxy.com/incidents","description":"History of FlashProxy proxy downtime and degradation incidents, detected automatically by an open-source prober and committed to a public, signed, hash-chained integrity ledger."}
 ]`
 
-// severityRank orders the non-operational states so an incident's badge reflects the
-// worst level it reached (a degraded window that escalated to down shows as down).
-func severityRank(s string) int {
-	switch s {
-	case "down":
-		return 2
-	case "degraded":
-		return 1
-	default:
-		return 0
-	}
-}
-
-// transitionTo extracts the destination state from a status_change message, whose
-// frozen prefix is "<from> -> <to> (...)". Returns "" if the message isn't a
-// recognizable transition.
-func transitionTo(msg string) string {
-	i := strings.Index(msg, " -> ")
-	if i < 0 {
-		return ""
-	}
-	f := strings.Fields(msg[i+4:])
-	if len(f) == 0 {
-		return ""
-	}
-	return f[0]
-}
-
 func humanDur(sec int64) string {
 	if sec < 60 {
 		if sec < 1 {
@@ -597,79 +569,50 @@ func humanDur(sec int64) string {
 	return fmt.Sprintf("%dd", dd)
 }
 
-// buildIncidents folds the raw status_change event stream into incident episodes: an
-// episode opens when a package first leaves "operational" and closes when it returns;
-// its severity is the worst state seen in between. no_data transitions are ignored
-// (a monitoring gap is not an outage). Still-open episodes are marked ongoing.
+// incidentsWindowMin bounds how far back /incidents enumerates incidents. They are
+// computed from probe_raw via slo.RollupIncidents — the SAME cross-vantage rollup,
+// SQL, and thresholds the credit engine (flash-staff-dash) uses — so a given outage
+// yields an identical (type, window) in both, rather than the monitor's coarser,
+// debounced event log.
+const incidentsWindowMin = 30 * 24 * 60 // 30 days
+
+// buildIncidents enumerates Down/Degraded incidents over the window from probe_raw
+// (the published cross-vantage SLA contract), newest first, and attaches any
+// operator-authored official statement.
 func (s *server) buildIncidents(r *http.Request) incidentsData {
 	d := incidentsData{
 		SiteURL:    s.cfg.SiteURL,
 		Updated:    "Updated " + time.Now().UTC().Format("2006-01-02 15:04 MST"),
-		WindowDays: 400, // matches the events-table TTL
+		WindowDays: incidentsWindowMin / (24 * 60),
 		JSONLD:     template.JS(incidentsJSONLD),
 	}
-	rows, err := s.ch.QueryJSON(r.Context(), fmt.Sprintf(
-		`SELECT toUInt32(toUnixTimestamp(ts)) AS t, package, message
-		 FROM %s.events WHERE type = 'status_change' ORDER BY ts ASC LIMIT 5000`,
-		s.cfg.ClickHouse.DB))
+	incs, err := slo.RollupIncidents(r.Context(), s.ch, s.cfg.ClickHouse.DB, incidentsWindowMin, s.cfg.SLO)
 	if err != nil {
 		log.Printf("buildIncidents: %v", err)
 		return d
 	}
-	type openInc struct {
-		start int64
-		worst string
-	}
-	type rawInc struct {
-		pkg        string
-		start, end int64
-		worst      string
-		ongoing    bool
-	}
-	open := map[string]*openInc{}
-	var incs []rawInc
-	for _, m := range rows {
-		pkg := chstore.Str(m, "package")
-		to := transitionTo(chstore.Str(m, "message"))
-		t := int64(chstore.Num(m, "t"))
-		switch {
-		case to == "operational":
-			if oi := open[pkg]; oi != nil {
-				incs = append(incs, rawInc{pkg: pkg, start: oi.start, end: t, worst: oi.worst})
-				delete(open, pkg)
-			}
-		case to == "down" || to == "degraded":
-			if oi := open[pkg]; oi != nil {
-				if severityRank(to) > severityRank(oi.worst) {
-					oi.worst = to
-				}
-			} else {
-				open[pkg] = &openInc{start: t, worst: to}
-			}
-		}
-		// to == "" or "no_data": ignore (gap, not an incident boundary)
-	}
-	now := time.Now().UTC().Unix()
-	for pkg, oi := range open {
-		incs = append(incs, rawInc{pkg: pkg, start: oi.start, end: now, worst: oi.worst, ongoing: true})
-	}
-	sort.Slice(incs, func(i, j int) bool { return incs[i].start > incs[j].start })
+	sort.Slice(incs, func(i, j int) bool { return incs[i].Start > incs[j].Start })
+	nowMin := time.Now().UTC().Unix()
+	nowMin -= nowMin % 60
 	stmts := s.loadStatements(r.Context())
 	for _, in := range incs {
-		end := time.Unix(in.end, 0).UTC().Format("2006-01-02 15:04 MST")
-		if in.ongoing {
-			end = "ongoing"
+		ongoing := in.End >= nowMin // last impacted minute is the current minute
+		endStr := time.Unix(in.End, 0).UTC().Format("2006-01-02 15:04 MST")
+		dur := in.End - in.Start
+		if ongoing {
+			endStr = "ongoing"
+			dur = nowMin + 60 - in.Start
 		}
 		v := incidentView{
-			Package:       in.pkg,
-			Severity:      in.worst,
-			SeverityLabel: statusLabel[in.worst],
-			Start:         time.Unix(in.start, 0).UTC().Format("2006-01-02 15:04 MST"),
-			End:           end,
-			Duration:      humanDur(in.end - in.start),
-			Ongoing:       in.ongoing,
+			Package:       in.Package,
+			Severity:      in.Type,
+			SeverityLabel: statusLabel[in.Type],
+			Start:         time.Unix(in.Start, 0).UTC().Format("2006-01-02 15:04 MST"),
+			End:           endStr,
+			Duration:      humanDur(dur),
+			Ongoing:       ongoing,
 		}
-		if st := bestStatement(stmts, in.pkg, in.start, in.end); st != nil {
+		if st := bestStatement(stmts, in.Package, in.Start, in.End); st != nil {
 			v.Statement = st.body
 			v.StatementBy = st.author
 			if st.pub > 0 {
@@ -751,7 +694,7 @@ func bestStatement(stmts []statementRow, pkg string, start, end int64) *statemen
 
 func (s *server) handleIncidents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Cache-Control", "public, max-age=180") // 30-day rollup; history changes slowly
 	if err := s.incTmpl.Execute(w, s.buildIncidents(r)); err != nil {
 		log.Printf("render incidents: %v", err)
 	}

@@ -222,3 +222,35 @@ func TestDefaults(t *testing.T) {
 		t.Fatalf("unexpected defaults: %+v", got)
 	}
 }
+
+// TestIncidentsFromBars verifies incident-window enumeration mirrors the staff-dash
+// port: contiguous down/degraded runs become one incident each (start inclusive, end
+// exclusive = last impacted minute + 60), a type change splits them, and
+// operational/no_data minutes end the current incident.
+func TestIncidentsFromBars(t *testing.T) {
+	b := func(t0 int64, st string) Bar { return Bar{T: t0, Status: st} }
+	// minutes at 0,60,120,...: op, down, down, op, degraded, degraded, no_data
+	bars := []Bar{
+		b(0, "operational"),
+		b(60, "down"), b(120, "down"),
+		b(180, "operational"),
+		b(240, "degraded"), b(300, "degraded"),
+		b(360, "no_data"),
+	}
+	got := IncidentsFromBars("isp", bars)
+	if len(got) != 2 {
+		t.Fatalf("want 2 incidents, got %d: %+v", len(got), got)
+	}
+	if got[0] != (Incident{Package: "isp", Type: "down", Start: 60, End: 180, Minutes: 2}) {
+		t.Errorf("down incident wrong: %+v", got[0])
+	}
+	if got[1] != (Incident{Package: "isp", Type: "degraded", Start: 240, End: 360, Minutes: 2}) {
+		t.Errorf("degraded incident wrong: %+v", got[1])
+	}
+
+	// Adjacent down→degraded with no operational gap must split into two incidents.
+	split := IncidentsFromBars("x", []Bar{b(0, "down"), b(60, "degraded")})
+	if len(split) != 2 || split[0].Type != "down" || split[1].Type != "degraded" {
+		t.Errorf("adjacent down->degraded must split: %+v", split)
+	}
+}
