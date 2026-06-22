@@ -715,31 +715,35 @@ func (s *server) loadStatements(ctx context.Context) []statementRow {
 	return out
 }
 
-// bestStatement returns the statement for pkg that overlaps [start,end] the most
-// (ties broken by most-recently published), or nil. The page's auto-detected
-// incidents and the dashboard's statements are derived independently, so matching is
-// by package + time overlap, tolerant of small start/end differences.
+// statementMatchTolerance: the dashboard and the monitor detect the same outage
+// independently, so their incident windows differ by seconds-to-minutes at the
+// edges (and can be adjacent rather than overlapping). Attach a statement to the
+// nearest incident of the same package within this gap. Incidents for one package
+// are normally spaced far apart, so this won't cross-link distinct incidents.
+const statementMatchTolerance = int64(30 * 60)
+
+// bestStatement returns the statement for pkg closest in time to the incident
+// [start,end] (gap 0 when they overlap), within statementMatchTolerance; ties broken
+// by most-recently published. Returns nil if none is close enough.
 func bestStatement(stmts []statementRow, pkg string, start, end int64) *statementRow {
 	var best *statementRow
-	bestOv := int64(-1)
+	bestGap := int64(1) << 62
 	for i := range stmts {
 		st := &stmts[i]
 		if st.pkg != pkg {
 			continue
 		}
-		lo, hi := start, end
-		if st.start > lo {
-			lo = st.start
+		gap := int64(0) // distance between the two intervals; 0 if they overlap
+		if st.start > end {
+			gap = st.start - end
+		} else if start > st.end {
+			gap = start - st.end
 		}
-		if st.end < hi {
-			hi = st.end
-		}
-		ov := hi - lo // overlap length; negative => disjoint
-		if ov < 0 {
+		if gap > statementMatchTolerance {
 			continue
 		}
-		if ov > bestOv || (ov == bestOv && best != nil && st.pub > best.pub) {
-			bestOv, best = ov, st
+		if gap < bestGap || (gap == bestGap && best != nil && st.pub > best.pub) {
+			bestGap, best = gap, st
 		}
 	}
 	return best
