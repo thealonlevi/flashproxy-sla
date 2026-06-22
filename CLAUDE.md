@@ -81,11 +81,15 @@ Shared `internal/` packages:
 - **`internal/slo`** — implements the **published SLA contract exactly, CROSS-VANTAGE**: a
   package is **Down only when ALL vantages are down that minute** (a single-vantage failure is
   NOT Down — it isolates one network path, not the proxy); **Degraded** = best-vantage
-  **average** connect-ms > `degraded_avg_ms` (50) for `degraded_for_min` (5) **consecutive**
-  minutes; Availability% = (withData − Down − ½·Degraded)/withData. `RollupPackages()` is the
-  authoritative cross-vantage implementation — the banner, the monitor's `Fetch`, and the
-  uptime/credit accounting all derive from it; `rollupSeries`/`Rollup` are the per-vantage
-  building blocks it reduces. Thresholds published at `/api/meta` so the verdict is reproducible.
+  **average round-trip response time (`ttfb_ms`)** > `degraded_avg_ms` (50) for `degraded_for_min`
+  (5) **consecutive** minutes; Availability% = (withData − Down − ½·Degraded)/withData. The SLA
+  *latency* metric is the response time (`MinutesSQL` selects `avg(ttfb_ms)`), NOT connect-ms;
+  availability/Down is still based on connect `success`. The per-vantage latency-Degraded verdict
+  applies only to a product's **home (lowest-latency) vantage** — a far vantage measuring it
+  cross-region (high geographic latency but reachable) is availability-only, never degraded.
+  `RollupPackages()` is the authoritative cross-vantage implementation — the banner, the monitor's
+  `Fetch`, and the uptime/credit accounting all derive from it; `rollupSeries` is the per-vantage
+  building block it reduces. Thresholds published at `/api/meta` so the verdict is reproducible.
 - **`internal/chstore`** — stdlib-only ClickHouse HTTP client. **Sends NO client-set settings on
   reads** — reader users are `readonly=1`, which rejects any setting with `Code 164: Cannot
   modify '…' in readonly mode` and 502s the whole site (this caused an outage). Query caps and

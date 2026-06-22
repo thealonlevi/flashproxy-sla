@@ -11,7 +11,7 @@
 //     vantage). A single-vantage failure is NOT Down — it isolates one
 //     network path, not the proxy.
 //   - Degraded   : Available, but the best (lowest-latency available) vantage's
-//     AVERAGE connect latency exceeds DegradedAvgMs for DegradedForMin
+//     AVERAGE round-trip response time (ttfb) exceeds DegradedAvgMs for DegradedForMin
 //     CONSECUTIVE minutes, and stays Degraded until the average
 //     recovers at/below the threshold. The run-up minutes before the
 //     threshold is met are not yet Degraded ("for N consecutive
@@ -36,7 +36,7 @@ import (
 
 // SLO are the published thresholds.
 type SLO struct {
-	DegradedAvgMs  float64 `json:"degraded_avg_ms"`  // avg connect-ms above which a minute is over threshold
+	DegradedAvgMs  float64 `json:"degraded_avg_ms"`  // avg round-trip response-ms (ttfb) above which a minute is over threshold
 	DegradedForMin int     `json:"degraded_for_min"` // consecutive over-threshold minutes that trigger Degraded
 	DownSuccessPct float64 `json:"down_success_pct"` // connect success% below which a minute is Down
 	StaleSeconds   int64   `json:"stale_seconds"`    // age of newest data beyond which status is no_data
@@ -60,30 +60,30 @@ func (s SLO) withDefaults() SLO {
 
 // Status is the current rollup + verdict for one package (optionally one vantage).
 type Status struct {
-	Package      string  `json:"package"`
-	Vantage      string  `json:"vantage"`
-	Status       string  `json:"status"`
-	ConnectMsAvg float64 `json:"connect_ms_avg"` // avg over the most recent data minute
-	SuccessPct   float64 `json:"success_pct"`
-	Samples      float64 `json:"samples"`
-	AgeSeconds   int64   `json:"age_seconds"`
+	Package       string  `json:"package"`
+	Vantage       string  `json:"vantage"`
+	Status        string  `json:"status"`
+	ResponseMsAvg float64 `json:"response_ms_avg"` // avg over the most recent data minute
+	SuccessPct    float64 `json:"success_pct"`
+	Samples       float64 `json:"samples"`
+	AgeSeconds    int64   `json:"age_seconds"`
 }
 
-// Minute is one per-minute rollup of the connect scenario.
+// Minute is one per-minute rollup of the connect scenario's round-trip response time (ttfb_ms).
 type Minute struct {
-	T            int64
-	ConnectMsAvg float64
-	SuccessPct   float64
-	Samples      float64
+	T             int64
+	ResponseMsAvg float64
+	SuccessPct    float64
+	Samples       float64
 }
 
-// MinutesSQL returns per-(package, vantage, minute) avg connect-ms and success% for
-// the connect scenario over the window. This is the single source the status,
+// MinutesSQL returns per-(package, vantage, minute) avg round-trip response time (ttfb)
+// and success%% for the connect scenario over the window — the single source the
 // uptime bars, and alerts all derive from.
 func MinutesSQL(db string, windowMin int) string {
 	return fmt.Sprintf(`SELECT package, vantage,
   toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
-  round(avg(connect_ms), 1)              AS connect_ms_avg,
+  round(avg(ttfb_ms), 1)                 AS response_ms_avg,
   round(100 * sum(success) / count(), 2) AS success_pct,
   toUInt32(count())                      AS samples
 FROM %s.probe_raw
@@ -102,7 +102,7 @@ func NewEvaluator(s SLO) *Evaluator { return &Evaluator{s: s.withDefaults()} }
 
 // Next classifies one minute. hasData=false marks a gap (which breaks the
 // consecutive run). It returns operational/degraded/down/no_data.
-func (e *Evaluator) Next(hasData bool, connectMsAvg, successPct float64) string {
+func (e *Evaluator) Next(hasData bool, responseMs, successPct float64) string {
 	if !hasData {
 		e.run = 0
 		return "no_data"
@@ -111,7 +111,7 @@ func (e *Evaluator) Next(hasData bool, connectMsAvg, successPct float64) string 
 		e.run = 0
 		return "down"
 	}
-	if connectMsAvg > e.s.DegradedAvgMs {
+	if responseMs > e.s.DegradedAvgMs {
 		e.run++
 		if e.run >= e.s.DegradedForMin {
 			return "degraded"
@@ -137,7 +137,7 @@ func Grid(now time.Time, windowMin int) []int64 {
 // Eval is the simple boundary classifier used for a single already-aggregated
 // minute where the consecutive rule does not apply (kept for callers that only need
 // down/degraded-by-instant/operational). Prefer Evaluator for sequences.
-func Eval(connectMsAvg, successPct float64, ageSec int64, s SLO) string {
+func Eval(responseMs, successPct float64, ageSec int64, s SLO) string {
 	s = s.withDefaults()
 	if ageSec > s.StaleSeconds {
 		return "no_data"
@@ -145,7 +145,7 @@ func Eval(connectMsAvg, successPct float64, ageSec int64, s SLO) string {
 	if successPct < s.DownSuccessPct {
 		return "down"
 	}
-	if connectMsAvg > s.DegradedAvgMs {
+	if responseMs > s.DegradedAvgMs {
 		return "degraded"
 	}
 	return "operational"
@@ -171,11 +171,11 @@ func Overall(statuses []string) (string, string) {
 
 // Bar is one classified minute for the uptime strip.
 type Bar struct {
-	T            int64   `json:"t"`
-	Status       string  `json:"status"`
-	ConnectMsAvg float64 `json:"connect_ms_avg"`
-	SuccessPct   float64 `json:"success_pct"`
-	Samples      float64 `json:"samples"`
+	T             int64   `json:"t"`
+	Status        string  `json:"status"`
+	ResponseMsAvg float64 `json:"response_ms_avg"`
+	SuccessPct    float64 `json:"success_pct"`
+	Samples       float64 `json:"samples"`
 }
 
 // VantageRollup is one (package, vantage) over the window: classified bars, the
@@ -200,12 +200,12 @@ func rollupSeries(byMinute map[int64]Minute, grid []int64, now int64, s SLO) Van
 	cur := Status{Status: "no_data"}
 	for i, t := range grid {
 		m, ok := byMinute[t]
-		status := ev.Next(ok, m.ConnectMsAvg, m.SuccessPct)
-		bars[i] = Bar{T: t, Status: status, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
+		status := ev.Next(ok, m.ResponseMsAvg, m.SuccessPct)
+		bars[i] = Bar{T: t, Status: status, ResponseMsAvg: m.ResponseMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
 		if ok {
 			withData++
 			lastDataT = t
-			cur = Status{Status: status, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
+			cur = Status{Status: status, ResponseMsAvg: m.ResponseMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
 			switch status {
 			case "down":
 				down++
@@ -247,7 +247,7 @@ func fetchMinutes(ctx context.Context, ch *chstore.Client, db string, windowMin 
 		}
 		t := int64(chstore.Num(m, "t"))
 		out[pkg][van][t] = Minute{
-			T: t, ConnectMsAvg: chstore.Num(m, "connect_ms_avg"),
+			T: t, ResponseMsAvg: chstore.Num(m, "response_ms_avg"),
 			SuccessPct: chstore.Num(m, "success_pct"), Samples: chstore.Num(m, "samples"),
 		}
 	}
@@ -259,16 +259,16 @@ func fetchMinutes(ctx context.Context, ch *chstore.Client, db string, windowMin 
 // single vantage (e.g. one region's network path) is NOT Down. Degraded uses the
 // best (lowest-latency) currently-available vantage's average, per the SLA.
 type PackageRollup struct {
-	Package      string
-	Status       string
-	BestVantage  string
-	ConnectMsAvg float64
-	SuccessPct   float64
-	Samples      float64
-	AgeSeconds   int64
-	UptimePct    float64
-	Bars         []Bar
-	Vantages     []VantageRollup
+	Package       string
+	Status        string
+	BestVantage   string
+	ResponseMsAvg float64
+	SuccessPct    float64
+	Samples       float64
+	AgeSeconds    int64
+	UptimePct     float64
+	Bars          []Bar
+	Vantages      []VantageRollup
 }
 
 // rollupPackageSeries computes the package's authoritative CROSS-VANTAGE rollup plus
@@ -304,8 +304,8 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 			hasData = true
 			samples += m.Samples
 			if m.SuccessPct >= s.DownSuccessPct { // available from this vantage this minute
-				if !availAny || m.ConnectMsAvg < bestAvg {
-					bestAvg, bestVan = m.ConnectMsAvg, v
+				if !availAny || m.ResponseMsAvg < bestAvg {
+					bestAvg, bestVan = m.ResponseMsAvg, v
 				}
 				availAny = true
 			}
@@ -317,7 +317,7 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 		if availAny {
 			succ = 100
 		}
-		synth[t] = Minute{T: t, ConnectMsAvg: bestAvg, SuccessPct: succ, Samples: samples}
+		synth[t] = Minute{T: t, ResponseMsAvg: bestAvg, SuccessPct: succ, Samples: samples}
 		bestVanAt[t] = bestVan
 	}
 
@@ -363,9 +363,9 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 				case "degraded":
 					deg++
 				}
-				cur = Status{Status: st, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples, Vantage: v}
+				cur = Status{Status: st, ResponseMsAvg: m.ResponseMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples, Vantage: v}
 			}
-			bars[i] = Bar{T: t, Status: st, ConnectMsAvg: m.ConnectMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
+			bars[i] = Bar{T: t, Status: st, ResponseMsAvg: m.ResponseMsAvg, SuccessPct: m.SuccessPct, Samples: m.Samples}
 		}
 		if lastT < 0 {
 			cur.AgeSeconds = now - grid[0]
@@ -385,7 +385,7 @@ func rollupPackageSeries(byVantage map[string]map[int64]Minute, grid []int64, no
 
 	return PackageRollup{
 		Status: cross.Current.Status, BestVantage: bestVan,
-		ConnectMsAvg: cross.Current.ConnectMsAvg, SuccessPct: cross.Current.SuccessPct,
+		ResponseMsAvg: cross.Current.ResponseMsAvg, SuccessPct: cross.Current.SuccessPct,
 		Samples: cross.Current.Samples, AgeSeconds: cross.Current.AgeSeconds,
 		UptimePct: cross.UptimePct, Bars: cross.Bars, Vantages: detail,
 	}
@@ -421,7 +421,7 @@ func Fetch(ctx context.Context, ch *chstore.Client, db string, s SLO) ([]Status,
 	for _, pr := range prs {
 		out = append(out, Status{
 			Package: pr.Package, Vantage: pr.BestVantage, Status: pr.Status,
-			ConnectMsAvg: pr.ConnectMsAvg, SuccessPct: pr.SuccessPct,
+			ResponseMsAvg: pr.ResponseMsAvg, SuccessPct: pr.SuccessPct,
 			Samples: pr.Samples, AgeSeconds: pr.AgeSeconds,
 		})
 	}

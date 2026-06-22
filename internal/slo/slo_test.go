@@ -65,7 +65,7 @@ func TestEvalSeriesCurrentStatus(t *testing.T) {
 	// All minutes over threshold and recent -> degraded at the latest data minute.
 	bm := map[int64]Minute{}
 	for _, t0 := range grid {
-		bm[t0] = Minute{T: t0, ConnectMsAvg: 70, SuccessPct: 100, Samples: 10}
+		bm[t0] = Minute{T: t0, ResponseMsAvg: 70, SuccessPct: 100, Samples: 10}
 	}
 	st := rollupSeries(bm, grid, now+10, testSLO).Current
 	if st.Status != "degraded" {
@@ -94,15 +94,15 @@ func TestUptimeHalfWeight(t *testing.T) {
 	bm := map[int64]Minute{}
 	// minutes 0..5: operational (avg 10, 100%)
 	for i := 0; i <= 5; i++ {
-		bm[grid[i]] = Minute{T: grid[i], ConnectMsAvg: 10, SuccessPct: 100, Samples: 10}
+		bm[grid[i]] = Minute{T: grid[i], ResponseMsAvg: 10, SuccessPct: 100, Samples: 10}
 	}
 	// minute 6: down (success 0)
-	bm[grid[6]] = Minute{T: grid[6], ConnectMsAvg: 10, SuccessPct: 0, Samples: 10}
+	bm[grid[6]] = Minute{T: grid[6], ResponseMsAvg: 10, SuccessPct: 0, Samples: 10}
 	// minutes 7..11: avg 70 (over threshold). With DegradedForMin=5, only the 5th
 	// consecutive over-threshold minute (index 11) is "degraded"; 7..10 are
 	// operational run-up. So degraded=1, down=1, withData=12.
 	for i := 7; i <= 11; i++ {
-		bm[grid[i]] = Minute{T: grid[i], ConnectMsAvg: 70, SuccessPct: 100, Samples: 10}
+		bm[grid[i]] = Minute{T: grid[i], ResponseMsAvg: 70, SuccessPct: 100, Samples: 10}
 	}
 	vr := rollupSeries(bm, grid, now+10, testSLO)
 	// uptime = (12 - 1 - 0.5*1)/12*100 = 10.5/12*100 = 87.5
@@ -125,8 +125,8 @@ func TestCrossVantageDownRequiresAll(t *testing.T) {
 	}
 	bv := map[string]map[int64]Minute{"us": {}, "eu": {}}
 	for _, tt := range grid {
-		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 0, Samples: 10}  // down
-		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 30, SuccessPct: 100, Samples: 10} // up
+		bv["us"][tt] = Minute{T: tt, ResponseMsAvg: 200, SuccessPct: 0, Samples: 10}  // down
+		bv["eu"][tt] = Minute{T: tt, ResponseMsAvg: 30, SuccessPct: 100, Samples: 10} // up
 	}
 	pr := rollupPackageSeries(bv, grid, now+10, testSLO)
 	if pr.Status != "operational" {
@@ -141,7 +141,7 @@ func TestCrossVantageDownRequiresAll(t *testing.T) {
 
 	// Now BOTH vantages down at every minute -> package Down, uptime 0.
 	for _, tt := range grid {
-		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 0, Samples: 10}
+		bv["eu"][tt] = Minute{T: tt, ResponseMsAvg: 200, SuccessPct: 0, Samples: 10}
 	}
 	pr = rollupPackageSeries(bv, grid, now+10, testSLO)
 	if pr.Status != "down" {
@@ -164,8 +164,8 @@ func TestNonHomeVantageNotDegraded(t *testing.T) {
 	}
 	bv := map[string]map[int64]Minute{"us": {}, "eu": {}}
 	for _, tt := range grid {
-		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 4, SuccessPct: 100, Samples: 10}   // home, fast
-		bv["eu"][tt] = Minute{T: tt, ConnectMsAvg: 200, SuccessPct: 100, Samples: 10} // cross-region, far
+		bv["us"][tt] = Minute{T: tt, ResponseMsAvg: 4, SuccessPct: 100, Samples: 10}   // home, fast
+		bv["eu"][tt] = Minute{T: tt, ResponseMsAvg: 200, SuccessPct: 100, Samples: 10} // cross-region, far
 	}
 	pr := rollupPackageSeries(bv, grid, now+10, testSLO)
 	if pr.Status != "operational" {
@@ -188,7 +188,7 @@ func TestNonHomeVantageNotDegraded(t *testing.T) {
 	// Genuine degradation: home vantage itself slow (>50ms) for the whole window ->
 	// home vantage AND package degraded; far vantage still operational.
 	for _, tt := range grid {
-		bv["us"][tt] = Minute{T: tt, ConnectMsAvg: 80, SuccessPct: 100, Samples: 10}
+		bv["us"][tt] = Minute{T: tt, ResponseMsAvg: 80, SuccessPct: 100, Samples: 10}
 	}
 	pr = rollupPackageSeries(bv, grid, now+10, testSLO)
 	if pr.Status != "degraded" {

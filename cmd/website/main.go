@@ -185,7 +185,7 @@ type component struct {
 	Package        string        `json:"package"`
 	Status         string        `json:"status"`
 	DefaultVantage string        `json:"default_vantage"`
-	ConnectMsAvg   float64       `json:"connect_ms_avg"`
+	ResponseMsAvg  float64       `json:"response_ms_avg"`
 	SuccessPct     float64       `json:"success_pct"`
 	Samples        float64       `json:"samples"`
 	UptimePct      float64       `json:"uptime_pct"`
@@ -194,14 +194,14 @@ type component struct {
 }
 
 type vantageView struct {
-	Vantage      string    `json:"vantage"`
-	Status       string    `json:"status"`
-	ConnectMsAvg float64   `json:"connect_ms_avg"`
-	SuccessPct   float64   `json:"success_pct"`
-	Samples      float64   `json:"samples"`
-	AgeSeconds   int64     `json:"age_seconds"`
-	UptimePct    float64   `json:"uptime_pct"`
-	Bars         []slo.Bar `json:"bars"`
+	Vantage       string    `json:"vantage"`
+	Status        string    `json:"status"`
+	ResponseMsAvg float64   `json:"response_ms_avg"`
+	SuccessPct    float64   `json:"success_pct"`
+	Samples       float64   `json:"samples"`
+	AgeSeconds    int64     `json:"age_seconds"`
+	UptimePct     float64   `json:"uptime_pct"`
+	Bars          []slo.Bar `json:"bars"`
 }
 
 func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
@@ -221,14 +221,14 @@ func (s *server) handleOverview(w http.ResponseWriter, r *http.Request) {
 		for i, vr := range pr.Vantages {
 			views[i] = vantageView{
 				Vantage: vr.Vantage, Status: vr.Current.Status,
-				ConnectMsAvg: vr.Current.ConnectMsAvg, SuccessPct: vr.Current.SuccessPct,
+				ResponseMsAvg: vr.Current.ResponseMsAvg, SuccessPct: vr.Current.SuccessPct,
 				Samples: vr.Current.Samples, AgeSeconds: vr.Current.AgeSeconds,
 				UptimePct: vr.UptimePct, Bars: vr.Bars,
 			}
 		}
 		comps = append(comps, component{
 			Package: pr.Package, Status: pr.Status, DefaultVantage: pr.BestVantage,
-			ConnectMsAvg: pr.ConnectMsAvg, SuccessPct: pr.SuccessPct,
+			ResponseMsAvg: pr.ResponseMsAvg, SuccessPct: pr.SuccessPct,
 			Samples: pr.Samples, UptimePct: pr.UptimePct, Bars: pr.Bars, Vantages: views,
 		})
 		statuses = append(statuses, pr.Status)
@@ -263,12 +263,13 @@ func (s *server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		}
 		vantageFilter = fmt.Sprintf(" AND vantage = '%s'", v)
 	}
-	// network RTT vs proxy connect, as separate time series (avg per minute)
+	// Response time (round-trip through the proxy to the nearest origin and back =
+	// ttfb_ms): via proxy vs the direct no-proxy baseline. Two series keyed by scenario.
 	sql := fmt.Sprintf(`SELECT scenario,
   toUInt32(toUnixTimestamp(toStartOfMinute(ts))) AS t,
-  round(avg(connect_ms), 1) AS value
+  round(avg(ttfb_ms), 1) AS value
 FROM %s.probe_raw
-WHERE scenario IN ('connect', 'net_rtt') AND package = '%s'%s AND ts > now() - INTERVAL %d MINUTE
+WHERE scenario IN ('connect', 'connect_direct') AND package = '%s'%s AND ts > now() - INTERVAL %d MINUTE
 GROUP BY scenario, t ORDER BY scenario, t`, s.cfg.ClickHouse.DB, pkg, vantageFilter, mins)
 	rows, err := s.ch.QueryJSON(r.Context(), sql)
 	if err != nil {
@@ -400,7 +401,7 @@ const jsonLD = `[
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
 {"@type":"Question","name":"Is FlashProxy operational right now?","acceptedAnswer":{"@type":"Answer","text":"FlashProxy's live operational status, uptime, and latency are published on status.flashproxy.com and updated continuously from US and EU vantage points."}},
 {"@type":"Question","name":"What proxy products does FlashProxy offer?","acceptedAnswer":{"@type":"Answer","text":"FlashProxy offers Shared ISP proxies (USA and EU), Datacenter proxies, IPv6 Datacenter proxies, and IPv6 Residential proxies, over HTTP and SOCKS5."}},
-{"@type":"Question","name":"How is FlashProxy uptime and latency measured?","acceptedAnswer":{"@type":"Answer","text":"Synthetic probes run continuously from multiple regions, measuring proxy connect latency, gateway network round-trip, throughput, success rate, and a direct no-proxy baseline for each product. The methodology is open source and the measurements are integrity-protected by a signed, hash-chained ledger."}}
+{"@type":"Question","name":"How is FlashProxy uptime and latency measured?","acceptedAnswer":{"@type":"Answer","text":"Synthetic probes run continuously from multiple regions, measuring round-trip response time through the proxy, gateway network round-trip, throughput, success rate, and a direct no-proxy baseline for each product. The methodology is open source and the measurements are integrity-protected by a signed, hash-chained ledger."}}
 ]}
 ]`
 
@@ -414,7 +415,7 @@ const slaJSONLD = `[
 {"@context":"https://schema.org","@type":"WebPage","name":"FlashProxy Service Level Agreement","url":"https://status.flashproxy.com/sla","description":"FlashProxy's 100% uptime guarantee with automatic, proportional compensation, independently verifiable via open-source monitoring and a public, integrity-protected metrics database."},
 {"@context":"https://schema.org","@type":"FAQPage","mainEntity":[
 {"@type":"Question","name":"Does FlashProxy offer an uptime SLA?","acceptedAnswer":{"@type":"Answer","text":"Yes. FlashProxy guarantees 100% availability on Datacenter, IPv6 Datacenter, Shared ISP USA, IPv6 Residential, and Shared ISP EU, with automatic, proportional compensation for any qualifying downtime or degradation."}},
-{"@type":"Question","name":"How does FlashProxy compensate for downtime?","acceptedAnswer":{"@type":"Answer","text":"Per-GB plans receive automatic account credits scaled to monthly availability. Time-based Unlimited plans receive an automatic SLA credit based on total plan cost. Degradation (best-vantage average connect latency above 50ms for 5 consecutive minutes) counts at half weight."}},
+{"@type":"Question","name":"How does FlashProxy compensate for downtime?","acceptedAnswer":{"@type":"Answer","text":"Per-GB plans receive automatic account credits scaled to monthly availability. Time-based Unlimited plans receive an automatic SLA credit based on total plan cost. Degradation (best-vantage average round-trip response time above 50ms for 5 consecutive minutes) counts at half weight."}},
 {"@type":"Question","name":"Is FlashProxy's SLA independently verifiable?","acceptedAnswer":{"@type":"Answer","text":"Yes. The monitoring system is fully open source, and the ClickHouse metrics database that powers status.flashproxy.com is publicly readable and integrity-protected by a signed, hash-chained ledger, so anyone can reproduce every availability figure and confirm the data has not been tampered with."}}
 ]}
 ]`
@@ -431,7 +432,7 @@ func (s *server) buildIndex(r *http.Request) idxData {
 	for _, pr := range prs {
 		d.Products = append(d.Products, idxProduct{
 			Name: pr.Package, Status: pr.Status, StatusLabel: statusLabel[pr.Status],
-			AvgMs: int(pr.ConnectMsAvg + 0.5), Vantage: strings.TrimPrefix(pr.BestVantage, "aws-"),
+			AvgMs: int(pr.ResponseMsAvg + 0.5), Vantage: strings.TrimPrefix(pr.BestVantage, "aws-"),
 		})
 		statuses = append(statuses, pr.Status)
 	}
@@ -536,7 +537,7 @@ func (s *server) handleLLMs(w http.ResponseWriter, r *http.Request) {
 	for _, p := range d.Products {
 		fmt.Fprintf(w, "- %s: %s, ~%dms avg connect (best vantage: %s)\n", p.Name, p.StatusLabel, p.AvgMs, p.Vantage)
 	}
-	fmt.Fprintf(w, "\n## What is measured\n\nPer product, per vantage: average connect latency (the time the proxy takes to establish the upstream connection), gateway network round-trip (TCP connect RTT), throughput (streaming and large-object), high-frequency small-payload setup, broad scraping reachability, long-session stability, and a direct (no-proxy) baseline for comparison.\n\n")
+	fmt.Fprintf(w, "\n## What is measured\n\nPer product, per vantage: average round-trip response time (the time the proxy takes to establish the upstream connection), gateway network round-trip (TCP connect RTT), throughput (streaming and large-object), high-frequency small-payload setup, broad scraping reachability, long-session stability, and a direct (no-proxy) baseline for comparison.\n\n")
 	fmt.Fprintf(w, "## Integrity\n\nEvery measurement is committed to a public, append-only, Ed25519-signed hash-chained ledger, so anyone can verify the data has not been tampered with.\n\n")
 	fmt.Fprintf(w, "## SLA\n\nFlashProxy backs these products with a 100%% uptime guarantee and automatic, proportional compensation. Full terms: %s/sla\n\n", s.cfg.SiteURL)
 	fmt.Fprintf(w, "## Source\n\nThis status page is open source and fully reproducible: %s — and the metrics database is publicly readable.\n", "https://github.com/thealonlevi/flashproxy-sla")

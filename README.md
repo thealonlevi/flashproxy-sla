@@ -49,7 +49,7 @@ visible. One row per attempt lands in `sla.probe_raw`.
 
 | Scenario | Simulates | Headline metric |
 |---|---|---|
-| `connect` | upstream connect (`CONNECT → 200`) | average connect-ms (the SLA metric) |
+| `connect` | upstream connect + round-trip to origin | **round-trip response time (ttfb)** — the SLA latency metric |
 | `net_rtt` | raw gateway network RTT (TCP connect) | network RTT ms |
 | `streaming` | heavy streaming / buffering | sustained throughput (Mbps, measured over the transfer window) |
 | `large_object` | large-object download | TTFB / throughput |
@@ -60,8 +60,8 @@ visible. One row per attempt lands in `sla.probe_raw`.
 The headline `connect` probe targets the project's **own deterministic origin**, not a
 third-party site, so the SLA number isn't polluted by some external host's availability
 (third-party reachability is measured separately by `scraping`). The page auto-selects
-the **best vantage** per product (lowest average connect-ms) as the default, with a
-per-product toggle; the latency chart overlays **network RTT vs proxy connect** so the
+the **best vantage** per product (lowest average response time) as the default, with a
+per-product toggle; the latency chart overlays **response time via proxy vs direct** so the
 network floor and the proxy overhead are side by side. `net_rtt` is a stdlib TCP-connect
 timing (no ICMP/raw sockets), so it works unprivileged in the distroless image.
 
@@ -72,7 +72,7 @@ contract can't drift:
 
 - **Available** — the `connect` scenario succeeds.
 - **Down** — a minute that is below the success threshold (`down_success_pct`, default 90) **from every vantage simultaneously**. A single-vantage failure is **not** Down (it isolates one network path, not the proxy).
-- **Degraded** — Available, but the **best vantage's average connect latency exceeds 50 ms for 5 consecutive minutes** (and stays Degraded until it recovers). The run-up minutes before the trigger are not yet Degraded.
+- **Degraded** — Available, but the **best vantage's average round-trip response time exceeds 50 ms for 5 consecutive minutes** (and stays Degraded until it recovers). The run-up minutes before the trigger are not yet Degraded.
 - **Availability%** = (minutes with data − Down − ½·Degraded) / minutes with data × 100.
 
 The exact thresholds are published at `/api/meta`, so the verdict is reproducible from

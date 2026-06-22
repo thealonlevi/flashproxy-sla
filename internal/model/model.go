@@ -13,11 +13,12 @@ import (
 // ProbeResult is one synthetic probe attempt. It is produced by the prober and
 // stored verbatim in ClickHouse (sla.probe_raw).
 //
-// connect_ms is the headline SLA metric: the time for the proxy to establish the
-// upstream connection (CONNECT -> 200), i.e. what a customer experiences as "time
-// to connect through the proxy". dial_ms is the separate client->proxy TCP
-// handshake, kept distinct so we can tell a proxy-side regression from a
-// network-path regression.
+// ttfb_ms is the headline SLA metric — the round-trip "response time" through the
+// proxy to the nearest origin and back (request→first byte over the established
+// tunnel), i.e. how fast a customer's packets reach the destination and return.
+// connect_ms (CONNECT -> 200 upstream establishment) and dial_ms (client->proxy TCP
+// handshake) are kept distinct as establishment diagnostics, so a proxy-side
+// regression can be told from a network-path regression.
 //
 // Stream/Seq tie the row to the append-only integrity ledger: Stream is the
 // worker's vantage id, Seq is the monotonic batch number the row was flushed in.

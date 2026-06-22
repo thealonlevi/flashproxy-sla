@@ -487,15 +487,15 @@ func monitorLoop(ctx context.Context, cfg Config, ch *chstore.Client) {
 
 // fireTransition records a status_change event (chained) and posts to Discord.
 func fireTransition(ctx context.Context, ch *chstore.Client, eventsChain *ledger.Chain, discord *http.Client, cfg Config, p slo.Status, prev string) {
-	log.Printf("status change %s: %s -> %s (avg %.0fms)", p.Package, prev, p.Status, p.ConnectMsAvg)
-	msg := fmt.Sprintf("%s -> %s (connect avg %.0fms, %.1f%% ok)", prev, p.Status, p.ConnectMsAvg, p.SuccessPct)
+	log.Printf("status change %s: %s -> %s (response %.0fms)", p.Package, prev, p.Status, p.ResponseMsAvg)
+	msg := fmt.Sprintf("%s -> %s (response %.0fms, %.1f%% ok)", prev, p.Status, p.ResponseMsAvg, p.SuccessPct)
 	ev := model.Event{TS: time.Now().UTC(), Type: "status_change", Package: p.Package, Message: msg}
 	if err := commitEvent(ctx, ch, eventsChain, ev); err != nil {
 		log.Printf("monitor: record event: %v", err)
 	}
 	if cfg.Discord != "" {
 		emoji := map[string]string{"operational": "✅", "degraded": "⚠️", "down": "🔴", "no_data": "⚪"}[p.Status]
-		postDiscord(discord, cfg.Discord, fmt.Sprintf("%s **%s**: `%s` → `%s` (connect avg %.0fms)", emoji, p.Package, prev, p.Status, p.ConnectMsAvg))
+		postDiscord(discord, cfg.Discord, fmt.Sprintf("%s **%s**: `%s` → `%s` (response %.0fms)", emoji, p.Package, prev, p.Status, p.ResponseMsAvg))
 	}
 }
 

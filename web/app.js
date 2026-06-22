@@ -18,7 +18,7 @@ function vantageOf(c) {
 function barTitle(b) {
   const t = new Date(b.t * 1000).toLocaleTimeString();
   if (b.status === "no_data" || !b.samples) return t + " · no data";
-  return `${t} · ${b.status} · avg ${Math.round(b.connect_ms_avg)}ms · ${Math.round(b.success_pct)}% ok · n=${Math.round(b.samples)}`;
+  return `${t} · ${b.status} · ${Math.round(b.response_ms_avg)}ms round-trip · ${Math.round(b.success_pct)}% ok · n=${Math.round(b.samples)}`;
 }
 
 async function loadOverview() {
@@ -59,7 +59,7 @@ function renderComponents() {
     const chips = c.vantages.map((vv) => {
       const cls = "vchip" + (vv.vantage === v.vantage ? " sel" : "") +
                   (vv.vantage === c.default_vantage ? " best" : "");
-      const med = vv.status === "no_data" ? "—" : fmt(vv.connect_ms_avg) + "ms";
+      const med = vv.status === "no_data" ? "—" : fmt(vv.response_ms_avg) + "ms";
       const star = vv.vantage === c.default_vantage ? "★ " : "";
       return `<button class="${cls}" data-pkg="${c.package}" data-v="${vv.vantage}" data-status="${vv.status}">${star}${shortV(vv.vantage)} ${med}</button>`;
     }).join("");
@@ -69,8 +69,8 @@ function renderComponents() {
         `<span class="comp-name">${c.package}</span>` +
         `<span class="comp-stat" data-status="${v.status}">${v.status.replace("_", " ")}</span>` +
       `</div>` +
-      `<div class="metric"><span class="big">${fmt(v.connect_ms_avg)}</span>` +
-        `<span class="unit">ms avg connect · via ${shortV(v.vantage)}</span></div>` +
+      `<div class="metric"><span class="big">${fmt(v.response_ms_avg)}</span>` +
+        `<span class="unit">ms response · via ${shortV(v.vantage)}</span></div>` +
       `<div class="vchips">${chips}</div>` +
       `<div class="bars">${bars}</div>` +
       `<div class="comp-bot">` +
@@ -103,7 +103,7 @@ function selectComponent(pkg) {
 async function loadSeries() {
   if (!selected) return;
   const v = vantageSel[selected] || "";
-  document.getElementById("metrics-title").textContent = `network RTT vs proxy connect · ${selected} · via ${shortV(v)}`;
+  document.getElementById("metrics-title").textContent = `response time · via proxy vs direct · ${selected} · via ${shortV(v)}`;
   let d;
   try {
     d = await (await fetch(`api/series?package=${encodeURIComponent(selected)}&minutes=${curMin}&vantage=${encodeURIComponent(v)}`)).json();
@@ -113,8 +113,8 @@ async function loadSeries() {
 }
 
 const SERIES_STYLE = {
-  connect: { label: "proxy connect", color: "#2f9e44" },
-  net_rtt: { label: "network RTT", color: "#3b82f6" },
+  connect: { label: "via proxy", color: "#2f9e44" },
+  connect_direct: { label: "direct (no proxy)", color: "#3b82f6" },
 };
 
 const SCN_ORDER = ["net_rtt", "connect", "streaming", "large_object", "hifreq_small", "scraping", "long_session"];
