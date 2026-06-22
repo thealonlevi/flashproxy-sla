@@ -50,9 +50,10 @@ module "frankfurt" {
 }
 
 # Dallas, Texas — AWS Dallas Local Zone (us-east-1-dfw-2), which lives in the
-# us-east-1 parent region. No Graviton in the Local Zone, so this is an x86 t3
-# instance (amd64 build) and IPv6 is off (Local Zones are IPv4-only). Worker +
-# origin only. PREREQUISITE: the Local Zone must be opted-in on the account:
+# us-east-1 parent region. The zone has no t-family/small sizes but does offer
+# Graviton, so this runs the smallest available ARM instance (m6g.medium, arm64 —
+# same build arch as the other nodes). IPv6 is off (Local Zones are IPv4-only).
+# Worker + origin only. PREREQUISITE: the Local Zone must be opted-in on the account:
 #   aws ec2 modify-availability-zone-group --region us-east-1 \
 #     --group-name us-east-1-dfw-2 --opt-in-status opted-in
 module "dallas" {
@@ -61,9 +62,9 @@ module "dallas" {
 
   name                 = "flashproxy-status-dallas"
   vantage              = "aws-dallas"
-  instance_type        = "t3.small" # no t4g/Graviton in the Dallas Local Zone
-  go_arch              = "amd64"
-  go_sha256            = "2852af0cb20a13139b3448992e69b868e50ed0f8a1e5940ee1de9e19a123b613" # go1.25.0 linux-amd64
+  instance_type        = "m6g.medium" # smallest size offered in dfw-2a (Graviton/arm64)
+  go_arch              = "arm64"
+  go_sha256            = "05de75d6994a2783699815ee553bd5a9327d8b79991de36e38b66862782f54ae" # go1.25.0 linux-arm64
   vpc_cidr             = "10.20.0.0/16"                                                     # distinct from ashburn's 10.10.0.0/16 (same region)
   availability_zone    = "us-east-1-dfw-2a"
   network_border_group = "us-east-1-dfw-2"
