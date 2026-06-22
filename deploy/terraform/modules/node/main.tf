@@ -6,6 +6,7 @@ terraform {
 
 locals {
   ipv6_pkgs = toset(["ipv6-residential", "ipv6-datacenter"])
+  ami_arch  = var.go_arch == "amd64" ? "amd64" : "arm64" # match the AMI to the build arch
   # The headline `connect` SLA metric targets our OWN deterministic origin (resolved
   # at boot via the __ORIGIN__/__ORIGIN6__ placeholders), not a third-party site, so
   # the number isn't polluted by Google/Cloudflare availability or per-IP blocking.
@@ -20,13 +21,14 @@ locals {
   }]
 }
 
-# Latest Ubuntu 24.04 ARM64 (Canonical)
+# Latest Ubuntu 24.04 (Canonical), arch matched to the build (arm64 for t4g, amd64
+# for x86 instances such as Local Zones where Graviton isn't offered).
 data "aws_ami" "ubuntu" {
   most_recent = true
   owners      = ["099720109477"]
   filter {
     name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-arm64-server-*"]
+    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-${local.ami_arch}-server-*"]
   }
 }
 
@@ -35,10 +37,11 @@ resource "aws_key_pair" "this" {
   public_key = var.ssh_public_key
 }
 
-# Dedicated dual-stack VPC so ipv6-egress packages can reach the origin over v6.
+# Dedicated VPC. Dual-stack where supported so ipv6-egress packages reach the origin
+# over v6; IPv6 is disabled for AWS Local Zones (which are IPv4-only).
 resource "aws_vpc" "this" {
-  cidr_block                       = "10.10.0.0/16"
-  assign_generated_ipv6_cidr_block = true
+  cidr_block                       = var.vpc_cidr
+  assign_generated_ipv6_cidr_block = var.enable_ipv6
   enable_dns_hostnames             = true
   tags                             = { Name = var.name }
 }
@@ -49,11 +52,13 @@ resource "aws_internet_gateway" "this" {
 }
 
 resource "aws_subnet" "this" {
-  vpc_id                          = aws_vpc.this.id
-  cidr_block                      = "10.10.1.0/24"
-  ipv6_cidr_block                 = cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, 1)
-  map_public_ip_on_launch         = true
-  assign_ipv6_address_on_creation = true
+  vpc_id                  = aws_vpc.this.id
+  cidr_block              = cidrsubnet(var.vpc_cidr, 8, 1)
+  map_public_ip_on_launch = true
+  # Pin the AZ when given (required for a Local Zone, e.g. us-east-1-dfw-1a).
+  availability_zone               = var.availability_zone != "" ? var.availability_zone : null
+  ipv6_cidr_block                 = var.enable_ipv6 ? cidrsubnet(aws_vpc.this.ipv6_cidr_block, 8, 1) : null
+  assign_ipv6_address_on_creation = var.enable_ipv6
   tags                            = { Name = var.name }
 }
 
@@ -63,9 +68,12 @@ resource "aws_route_table" "this" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.this.id
   }
-  route {
-    ipv6_cidr_block = "::/0"
-    gateway_id      = aws_internet_gateway.this.id
+  dynamic "route" {
+    for_each = var.enable_ipv6 ? [1] : []
+    content {
+      ipv6_cidr_block = "::/0"
+      gateway_id      = aws_internet_gateway.this.id
+    }
   }
   tags = { Name = var.name }
 }
@@ -139,7 +147,7 @@ resource "aws_instance" "this" {
   key_name               = aws_key_pair.this.key_name
   subnet_id              = aws_subnet.this.id
   vpc_security_group_ids = [aws_security_group.this.id]
-  ipv6_address_count     = 1 # dual-stack: origin reachable over v6 for ipv6 packages
+  ipv6_address_count     = var.enable_ipv6 ? 1 : 0 # dual-stack where supported (not in Local Zones)
 
   # Enforce IMDSv2 explicitly (don't rely on the account default) and limit the hop
   # count to 1 so a containerized/forwarded SSRF can't reach instance metadata.
@@ -179,5 +187,7 @@ resource "aws_instance" "this" {
 resource "aws_eip" "this" {
   instance = aws_instance.this.id
   domain   = "vpc"
-  tags     = { Name = var.name }
+  # Local Zones allocate EIPs from the zone's own border group, not the region's.
+  network_border_group = var.network_border_group != "" ? var.network_border_group : null
+  tags                 = { Name = var.name }
 }

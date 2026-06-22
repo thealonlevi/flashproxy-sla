@@ -11,7 +11,32 @@ variable "git_ref" {
 }
 variable "go_arch" {
   type    = string
-  default = "arm64" # t4g instances
+  default = "arm64" # t4g instances; "amd64" for x86 (e.g. Local Zones without Graviton)
+}
+
+variable "vpc_cidr" {
+  type    = string
+  default = "10.10.0.0/16"
+}
+
+# Pin a specific AZ — REQUIRED for an AWS Local Zone (e.g. "us-east-1-dfw-1a").
+# Empty lets AWS pick a default AZ in the region.
+variable "availability_zone" {
+  type    = string
+  default = ""
+}
+
+# A Local Zone allocates EIPs from its own network border group (e.g.
+# "us-east-1-dfw-1"). Empty uses the region default.
+variable "network_border_group" {
+  type    = string
+  default = ""
+}
+
+# Local Zones are IPv4-only; set false there to skip all IPv6 provisioning.
+variable "enable_ipv6" {
+  type    = bool
+  default = true
 }
 variable "go_version" {
   type    = string
