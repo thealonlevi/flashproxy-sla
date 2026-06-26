@@ -6,17 +6,22 @@ locals {
   # Each package's connect_target is the origin in that package's PROXY region, NOT
   # the vantage's own origin — so response time isolates the proxy (vantage->proxy +
   # proxy->co-located origin ~= vantage->proxy). Measured proxy homes: datacenter /
-  # isp / ipv6-* egress ~5ms from Ashburn (us-east); isp_eu ~5ms from Frankfurt (EU).
-  # EIPs are stable; the Ashburn v6 is the instance address — update it if the Ashburn
-  # node is replaced (or move these to stable DNS A/AAAA to fully decouple).
+  # ipv6-datacenter ~4ms from Ashburn (us-east); isp ~now in Dallas; isp_eu ~10ms
+  # from Frankfurt (EU). EIPs are stable; the Ashburn v6 is the instance address —
+  # update it if the Ashburn node is replaced (or move these to stable DNS A/AAAA).
   ashburn_v4   = "52.204.201.83:8080"
   ashburn_v6   = "[2600:1f18:3322:9d01:d95c:17fe:e48a:3ea1]:8080"
   frankfurt_v4 = "18.193.186.1:8080"
+  dallas_v4    = "18.88.33.127:8080" # Dallas Local Zone origin (v4 only — LZ has no IPv6)
   package_targets = {
     "datacenter"       = local.ashburn_v4
-    "isp"              = local.ashburn_v4
+    "isp"              = local.dallas_v4 # ISP proxy moved to Dallas → co-locate the origin
     "isp_eu"           = local.frankfurt_v4
     "ipv6-datacenter"  = local.ashburn_v6
+    # ipv6-residential proxy is moving to Dallas, but the Dallas LZ has NO IPv6 origin,
+    # so its v6-egress still targets the nearest v6 origin we run (Ashburn ~30ms). That
+    # ~30ms is geographic distance to the test origin, not proxy overhead — unavoidable
+    # until a v6-reachable origin exists near Dallas (the LZ can't provide one).
     "ipv6-residential" = local.ashburn_v6
   }
 }
