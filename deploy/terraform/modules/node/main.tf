@@ -18,10 +18,18 @@ locals {
     proxy_url = u
     # connect_target = origin nearest THIS package's proxy (proxy-region origin); if
     # not mapped, fall back to the vantage-local origin placeholder (resolved at boot).
+    # Kept as the single-target fallback; connect_targets is what the worker probes.
     connect_target = lookup(var.package_targets, pkg, contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__")
     origin_get     = "/connect"
-    ip_version     = contains(local.ipv6_pkgs, pkg) ? 6 : 4
-    interval_ms    = 10000
+    # connect_targets = our co-located origin (the availability floor) + the shared
+    # anycast endpoints; the worker probes all and records the BEST (lowest ttfb; Down
+    # only if every one fails), so target-side noise can't look like a proxy fault.
+    connect_targets = concat(
+      [{ target = lookup(var.package_targets, pkg, contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__"), path = "/connect" }],
+      var.connect_probe_extra,
+    )
+    ip_version  = contains(local.ipv6_pkgs, pkg) ? 6 : 4
+    interval_ms = 10000
   }]
 }
 

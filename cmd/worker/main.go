@@ -34,10 +34,23 @@ import (
 type Target struct {
 	Package       string `json:"package"`
 	ProxyURL      string `json:"proxy_url"`
-	ConnectTarget string `json:"connect_target"`
-	OriginGet     string `json:"origin_get"`
-	IPVersion     uint8  `json:"ip_version"`
-	IntervalMS    int    `json:"interval_ms"`
+	ConnectTarget string `json:"connect_target"` // single-target fallback (legacy)
+	OriginGet     string `json:"origin_get"`     // GET path for the fallback target
+	// ConnectTargets is the variety of endpoints probed each cycle; the BEST result
+	// (lowest ttfb among successes; Down only if all fail) is recorded. Empty =>
+	// fall back to the single {ConnectTarget, OriginGet}.
+	ConnectTargets []probe.Endpoint `json:"connect_targets"`
+	IPVersion      uint8            `json:"ip_version"`
+	IntervalMS     int              `json:"interval_ms"`
+}
+
+// connectEndpoints returns the endpoint set to probe for this target: the configured
+// variety list, or the single legacy target as a one-element fallback.
+func (t Target) connectEndpoints() []probe.Endpoint {
+	if len(t.ConnectTargets) > 0 {
+		return t.ConnectTargets
+	}
+	return []probe.Endpoint{{Target: t.ConnectTarget, Path: t.OriginGet}}
 }
 
 type chConn struct {
@@ -276,9 +289,10 @@ func runTarget(ctx context.Context, cfg Config, t Target, out chan<- model.Probe
 
 	// Each scenario runs twice per cycle: through the proxy, and direct (nil proxy)
 	// as the no-proxy baseline ("_direct"), so the page can show proxy overhead.
+	eps := t.connectEndpoints()
 	start(defInt(t.IntervalMS, 20000), func() {
-		emit(probe.ConnectScenario(proxy, t.ConnectTarget, t.OriginGet, timeout))
-		emit(probe.ConnectScenario(nil, t.ConnectTarget, t.OriginGet, timeout))
+		emit(probe.ConnectBest(proxy, eps, timeout))
+		emit(probe.ConnectBest(nil, eps, timeout))
 	})
 	start(s.ScrapingIntervalMS, func() {
 		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)

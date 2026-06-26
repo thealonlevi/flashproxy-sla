@@ -54,6 +54,21 @@ variable "package_targets" {
   type    = map(string)
   default = {}
 }
+
+# Extra connect endpoints probed alongside each package's own origin every cycle; the
+# BEST result (lowest ttfb among successes; Down only if ALL fail) is recorded, so a
+# single flaky/slow destination can't masquerade as a proxy problem. These are anycast
+# connectivity-check endpoints (tiny, fast, near every region, dual-stack via hostname
+# so they work for v4 and v6-egress packages). Our own origin stays in the set as the
+# availability floor — there is no hard external dependency.
+variable "connect_probe_extra" {
+  type = list(object({ target = string, path = string }))
+  default = [
+    { target = "detectportal.firefox.com:80", path = "/success.txt" },
+    { target = "www.gstatic.com:80", path = "/generate_204" },
+    { target = "one.one.one.one:80", path = "/" },
+  ]
+}
 variable "go_version" {
   type    = string
   default = "1.25.0"

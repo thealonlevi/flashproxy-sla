@@ -11,10 +11,64 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/flashproxy/flashproxy-status/internal/model"
 )
+
+// Endpoint is one connect-scenario target: a host:port the proxy CONNECTs to, plus a
+// plaintext GET path used to measure ttfb (empty => the established tunnel is the
+// signal, no GET). Hostnames let the proxy resolve the right address family, so the
+// same anycast endpoints work for v4 and v6-egress packages.
+type Endpoint struct {
+	Target string `json:"target"`
+	Path   string `json:"path"`
+}
+
+// ConnectBest runs the connect scenario against EVERY endpoint concurrently and
+// returns the single BEST result for the cycle: among endpoints that succeeded, the
+// lowest ttfb (response time) wins; the package counts as reachable if ANY endpoint
+// succeeded, and Down only if EVERY one failed. Probing a variety of targets and
+// keeping the best makes the SLA signal robust to target-side noise — a slow or flaky
+// destination can't masquerade as a proxy problem. The returned row carries the
+// winning target, so downstream (rollup/ledger/incidents) is unchanged.
+func ConnectBest(proxy *url.URL, eps []Endpoint, timeout time.Duration) model.ProbeResult {
+	if len(eps) == 0 {
+		return model.ProbeResult{Scenario: scn("connect", proxy), Proto: "http", TS: time.Now().UTC(), ErrorType: "no_targets"}
+	}
+	results := make([]model.ProbeResult, len(eps))
+	var wg sync.WaitGroup
+	for i, ep := range eps {
+		wg.Add(1)
+		go func(i int, ep Endpoint) {
+			defer wg.Done()
+			results[i] = ConnectScenario(proxy, ep.Target, ep.Path, timeout)
+		}(i, ep)
+	}
+	wg.Wait()
+	best := results[0]
+	for _, r := range results[1:] {
+		best = betterConnect(best, r)
+	}
+	return best
+}
+
+// betterConnect prefers a success over a failure; between two successes the lower
+// ttfb (tie-break lower connect_ms) wins; between two failures it keeps the first
+// (the row is Down regardless).
+func betterConnect(a, b model.ProbeResult) model.ProbeResult {
+	if a.Success != b.Success {
+		if a.Success == 1 {
+			return a
+		}
+		return b
+	}
+	if a.Success == 1 && (b.TTFBMS < a.TTFBMS || (b.TTFBMS == a.TTFBMS && b.ConnectMS < a.ConnectMS)) {
+		return b
+	}
+	return a
+}
 
 // ConnectScenario measures dial_ms and connect_ms to target. With a proxy it's an
 // HTTP CONNECT tunnel (connect_ms = proxy upstream establishment); with proxy==nil

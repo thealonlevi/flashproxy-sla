@@ -67,8 +67,13 @@ Three binaries, strictly separated by what they touch:
   echoes ClickHouse error text to clients). `/` falls through to a static server otherwise.
 - **`cmd/origin`** — deterministic upstream (`/connect`, `/bytes/{n}`, `/small`, `/hold`) so
   payload metrics are pure SLA signal with no third-party variance. Bind dual-stack (`:8080`
-  serves v4+v6) so IPv6 packages exercise v6 egress. The headline `connect` probe targets
-  this origin (not a third-party site) so the SLA number has no external dependency.
+  serves v4+v6) so IPv6 packages exercise v6 egress. The headline `connect` probe is
+  **best-of-N** (`probe.ConnectBest`): each cycle it probes a *set* of endpoints — our
+  co-located origin PLUS a few anycast connectivity-check endpoints (`detectportal.firefox.com`,
+  `www.gstatic.com`, `one.one.one.one`) — and records only the BEST (lowest `ttfb` among
+  successes; Down only if EVERY target fails). This isolates the proxy from target-side noise.
+  Our origin stays in the set as the availability floor, so there's no *hard* external
+  dependency. The payload scenarios (throughput etc.) still use only our origin.
 - **`cmd/verify`** — standalone public auditor: recomputes every batch/entry hash and checks
   every checkpoint signature using only public read access. **`cmd/keygen`** mints the keypair.
 
