@@ -73,6 +73,7 @@ cat >/opt/flashproxy/config/worker.json <<'JSON'
   "origin_ipv6": "__ORIGIN6__",
   "clickhouse": { "url": "${ch_url}", "db": "sla", "user": "flashproxy-status-worker", "password": "${ch_worker_password}" },
   "slo": { "degraded_avg_ms": 50, "degraded_for_min": 5, "down_success_pct": 90, "stale_seconds": 120 },
+  "scenarios": { "streaming_bytes": 524288, "streaming_interval_ms": 600000 },
   "targets": ${targets_json}
 }
 JSON
