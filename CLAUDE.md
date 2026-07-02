@@ -61,10 +61,15 @@ Three binaries, strictly separated by what they touch:
   `checkpointLoop` that signs all chains' heads.
 - **`cmd/website`** — strictly **read-only** (reader role; never writes). Hardened
   `http.Server` (timeouts, panic recovery, security headers, TLS 1.2 min); server-renders
-  `/` and `/sla`; serves the JSON API; `/healthz` is a real ClickHouse readiness check,
-  `/livez` is liveness; publishes the public CH key + SLO thresholds + ledger public key at
-  `/api/meta`; `/api/ledger` exposes chain heads + checkpoints. Generic errors only (never
-  echoes ClickHouse error text to clients). `/` falls through to a static server otherwise.
+  `/`, `/sla`, and `/incidents` (downtime & degradation history) from Go `html/template`
+  files loaded at startup from the `web_dir` config path (`web/*.html.tmpl` — **not** embedded,
+  so the `web/` dir must ship alongside the binary); serves the JSON API; `/healthz` is a real
+  ClickHouse readiness check, `/livez` is liveness; publishes the public CH key + SLO thresholds
+  + ledger public key at `/api/meta`; `/api/ledger` exposes chain heads + checkpoints. Generic
+  errors only (never echoes ClickHouse error text to clients). `/` falls through to a static
+  server otherwise. The `/incidents` page enumerates incidents from the **same cross-vantage
+  rollup as the credit engine** and attaches optional operator-authored official statements
+  (see incident statements below); it degrades gracefully when the statements table is absent.
 - **`cmd/origin`** — deterministic upstream (`/connect`, `/bytes/{n}`, `/small`, `/hold`) so
   payload metrics are pure SLA signal with no third-party variance. Bind dual-stack (`:8080`
   serves v4+v6) so IPv6 packages exercise v6 egress. The headline `connect` probe is
@@ -94,7 +99,9 @@ Shared `internal/` packages:
   cross-region (high geographic latency but reachable) is availability-only, never degraded.
   `RollupPackages()` is the authoritative cross-vantage implementation — the banner, the monitor's
   `Fetch`, and the uptime/credit accounting all derive from it; `rollupSeries` is the per-vantage
-  building block it reduces. Thresholds published at `/api/meta` so the verdict is reproducible.
+  building block it reduces. `RollupIncidents()`/`IncidentsFromBars()` derive the `/incidents`
+  history from those **same rollup bars**, so a listed incident matches what the credit engine
+  bills. Thresholds published at `/api/meta` so the verdict is reproducible.
 - **`internal/chstore`** — stdlib-only ClickHouse HTTP client. **Sends NO client-set settings on
   reads** — reader users are `readonly=1`, which rejects any setting with `Code 164: Cannot
   modify '…' in readonly mode` and 502s the whole site (this caused an outage). Query caps and
@@ -121,6 +128,15 @@ user writes. The read/write split is the mechanism that makes the data trustwort
 
 Passwords are `${ENV}` placeholders in the SQL; substitute at bootstrap. The Docker demo
 shortcuts this with a single `sla` admin user — production uses the three scoped roles.
+
+**Incident statements are editorial, NOT ledger data.** `sla.incident_statements`
+(`ReplacingMergeTree`, 400-day TTL — migration `002`) holds operator-authored official
+statements attached to incidents. It is deliberately **outside the integrity ledger** (empty
+`body` = retracted). The internal dashboard **`flash-staff-dash`** publishes statements through
+a fourth, narrow role — `sla_statements_writer` / user `flashproxy-status-statements` — that can
+only SELECT/INSERT this one table, so it can **never forge measurements** the way the broad
+`sla_writer` (probe_raw/events/ledger) could. `sla_reader` already covers `sla.*`, so the public
+and website users read statements with no grant change.
 
 ## Conventions that matter
 
