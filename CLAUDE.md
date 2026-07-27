@@ -79,6 +79,11 @@ Three binaries, strictly separated by what they touch:
   successes; Down only if EVERY target fails). This isolates the proxy from target-side noise.
   Our origin stays in the set as the availability floor, so there's no *hard* external
   dependency. The payload scenarios (throughput etc.) still use only our origin.
+  The set is per-target config `connect_targets: [{target, path}]` (`path: ""` ⇒ the tunnel
+  itself is the signal, no GET); the singular `connect_target`/`origin_get` is the **legacy
+  single-target fallback**, still honored. Whichever origin a package points at should be the
+  one **co-located with that package's PROXY**, not the vantage's own origin — response time
+  then isolates the proxy hop (vantage→proxy + proxy→co-located origin ≈ vantage→proxy).
 - **`cmd/verify`** — standalone public auditor: recomputes every batch/entry hash and checks
   every checkpoint signature using only public read access. **`cmd/keygen`** mints the keypair.
 
@@ -159,19 +164,39 @@ and website users read statements with no grant change.
 - **Numeric helpers:** keep most SQL outputs <64-bit (`toUInt32`, `round`) so they render as
   JSON numbers; for genuine UInt64 (`seq`, `bytes`) use `chstore.NumU64`, never `Num` (float
   precision loss past 2^53).
+- **Probe volume is a cost line, not just a knob.** Every payload byte is billed AWS egress —
+  the `streaming` scenario alone (proxy + `_direct`, every vantage) once ran at its 5 MB /120s
+  default and was ~90% of a data-transfer bill that was ~83% of total AWS spend. Prod pins
+  `"scenarios": {"streaming_bytes": 524288, "streaming_interval_ms": 600000}` in
+  `deploy/terraform/modules/node/user-data.sh.tftpl` (512 KB /600s — still past TCP slow-start,
+  so Mbps stays meaningful). **`config/worker.example.json` still documents the expensive
+  defaults** — don't copy it to a metered host verbatim, and price any new payload scenario or
+  cadence change (bytes × 2 for the baseline × vantages × cycles/day) before shipping it.
 - **No new dependencies.** The dependency-free property is load-bearing (offline, reproducible
   builds; cloud-init builds from source). The ledger crypto is stdlib (`crypto/ed25519`,
   `crypto/sha256`) precisely to preserve this.
 
 ## Deploy
 
-- **`deploy/terraform/`** — two-region AWS (Ashburn `us-east-1` + Frankfurt `eu-central-1`):
+- **`deploy/terraform/`** — three AWS vantages: Ashburn (`us-east-1`), Frankfurt
+  (`eu-central-1`), and Dallas (the `us-east-1-dfw-2` **Local Zone**, so it lives in the
+  `us-east-1` parent region/provider, needs its zone-group opted in, and must use
+  `m6g.medium` — dfw-2a offers no t-family sizes). Each is a module instance of
+  `modules/node` with its own VPC CIDR;
   a dual-stack VPC, `t4g.small` instances that **build the binaries from source in cloud-init**
   (no registry), worker + origin everywhere and website in Ashburn on `:443` with a Cloudflare
   Origin Certificate. Instances enforce IMDSv2 (`metadata_options`), verify the Go toolchain
   SHA-256, and build from a pinnable `git_ref` (use an immutable commit SHA). Secrets come via
   env / a gitignored `*.tfvars`; `terraform.tfstate*`, `*.tfvars`, and `.terraform/` are
   gitignored and must never be committed (state would leak resource attributes).
+  **State lives in S3, not on any one box** — versioned + SSE-S3 + TLS-only, with S3-native
+  locking (`use_lockfile`, needs Terraform >= 1.10 — hence the bumped `required_version`).
+  `backend.tf` is a **partial** backend config: the actual bucket/key/region live in
+  `backend.hcl`, which is **gitignored** (this repo is public, and the state location is
+  not something to publish) — copy `backend.hcl.example` and run
+  `terraform init -backend-config=backend.hcl`. The bucket is bootstrapped **out-of-band**
+  (it can't be managed by the state it stores); `backend.tf` carries the `aws s3api`
+  commands to recreate it. Credentials come from the ambient AWS identity, never the repo.
 - **`deploy/clickhouse-deploy-prompt.md`** + **`deploy/bootstrap-roles.sh`** — runbook + script
   for the self-hosted ClickHouse: loopback bind, UTC timezone, `select_from_system_db_requires_grant`
   + query masking (so the published reader can't read `system.*`), the schema incl. the ledger,
@@ -185,12 +210,26 @@ and website users read statements with no grant change.
   the public IP is stable, but that vantage is down during the rebuild. Apply a **saved reviewed
   plan** (`terraform plan -replace … -out`, then `apply <plan>`) — blind `-auto-approve` on prod
   is blocked. **Baking an AMI** removes the slow/fragile boot — the recurring real fix.
+- **A bare `terraform apply` will rebuild the ENTIRE fleet — check the plan every time.**
+  `modules/node` picks its AMI with `data "aws_ami" "ubuntu" { most_recent = true }`, so as
+  soon as Canonical publishes a new Ubuntu 24.04 image the `ami` attribute changes and that
+  **forces replacement** of all three instances at once (all vantages down together, each
+  needing the fragile ~5 min cloud-init build). As of 2026-07-27 a plan already shows
+  `3 to add, 3 to change, 3 to destroy` for exactly this reason — it is AMI drift, not a
+  config change. Roll instances **one at a time** with `-replace=module.<region>.aws_instance.this`,
+  and to defuse it permanently either pin the AMI id in a variable or add
+  `lifecycle { ignore_changes = [ami] }` to the instance.
 - **Faster than a replace: in-place binary redeploy.** Break-glass SSH key is
   `~/.ssh/flashproxy-sla` (matches tfvars `ssh_public_key`, comment `flashproxy-sla-breakglass`).
   On the box: `cd /opt/flashproxy/src && git fetch && git checkout <sha> && CGO_ENABLED=0
   /usr/local/go/bin/go build -trimpath -o /opt/flashproxy/<bin> ./cmd/<bin> && systemctl restart
   flashproxy-<unit>`. Only that unit blips. (Replacing an instance changes its SSH host key —
   clear the stale `known_hosts` entry; same EIP.)
+- **Config lives in cloud-init, so a config-only change needs a hot-patch too.** The unit configs
+  are heredoc'd into `/opt/flashproxy/config/*.json` by `user-data.sh.tftpl`, which runs **only on
+  first boot** — editing the template changes new/replaced instances, not the running fleet. To
+  land it now, SSH in, edit `/opt/flashproxy/config/worker.json`, `systemctl restart
+  flashproxy-worker`, and commit the template change so a rebuild doesn't silently revert it.
 - **Migrate ClickHouse BEFORE deploying new binaries.** Admin is loopback-only on the CH box, so
   migrations (`deploy/migrations/*.sql`, additive/online ALTERs) run THERE, not from a dev box.
   The new worker reads `sla.ledger` / writes `stream`,`seq` on startup → it **crash-loops** on an

@@ -23,3 +23,5 @@
 *.tfvars
 .terraform/
 *.tfstate*
+# Real backend coordinates (state bucket / account). Only the .example is committed.
+backend.hcl
