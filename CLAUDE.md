@@ -197,6 +197,18 @@ and website users read statements with no grant change.
   `terraform init -backend-config=backend.hcl`. The bucket is bootstrapped **out-of-band**
   (it can't be managed by the state it stores); `backend.tf` carries the `aws s3api`
   commands to recreate it. Credentials come from the ambient AWS identity, never the repo.
+- **Everything needed to operate the fleet lives in S3 — use `./tf.sh`, not bare `terraform`.**
+  Alongside the state, `<prefix>/secrets/` holds `terraform.tfvars` and the break-glass SSH
+  private key. `tf.sh` streams them in at run time (`-var-file=<(aws s3 cp … -)`), so a fresh
+  machine needs only `git clone` + an AWS identity: `./tf.sh init`, `./tf.sh plan`,
+  `./tf.sh apply`, `./tf.sh ssh <ashburn|frankfurt|dallas>`. There is **no `terraform.tfvars`
+  in the working dir** — bare `terraform plan` will fail on missing variables, by design.
+  **Never** read these secrets with a Terraform `data` source (`aws_secretsmanager_secret_version`,
+  `aws_ssm_parameter`): data-source results are persisted to state in PLAINTEXT. State today
+  contains zero secrets — the provider stores `user_data` as a SHA1 hash, not the rendered
+  script — and passing secrets as `-var-file` keeps it that way.
+  After changing a secret, re-upload it or the S3 copy silently goes stale:
+  `aws s3 cp terraform.tfvars s3://<bucket>/<prefix>/secrets/terraform.tfvars --sse AES256`.
 - **`deploy/clickhouse-deploy-prompt.md`** + **`deploy/bootstrap-roles.sh`** — runbook + script
   for the self-hosted ClickHouse: loopback bind, UTC timezone, `select_from_system_db_requires_grant`
   + query masking (so the published reader can't read `system.*`), the schema incl. the ledger,
