@@ -35,11 +35,39 @@
     "stale_seconds": 120
   },
 
+  "//connect_targets": "The connect scenario probes a stratified sample of this pool each cycle: the origin (group 'origin', ALWAYS probed = availability floor) plus one endpoint from each of GroupsPerCycle other provider groups. Best result wins (lowest ttfb); Down only if every sampled endpoint fails. All are HTTP/80 connectivity checks with a fetchable body or 204 — never :443 CONNECT-only (that zeros ttfb). The pool below is shared; give v6 packages the v6 origin. The legacy singular connect_target/origin_get is still honored as a one-element fallback.",
+  "//connect_pool_shared": [
+    { "target": "detectportal.firefox.com:80",      "path": "/success.txt",              "group": "mozilla" },
+    { "target": "connectivitycheck.gstatic.com:80", "path": "/generate_204",             "group": "google" },
+    { "target": "clients3.google.com:80",           "path": "/generate_204",             "group": "google" },
+    { "target": "www.msftconnecttest.com:80",       "path": "/connecttest.txt",          "group": "microsoft" },
+    { "target": "www.msftncsi.com:80",              "path": "/ncsi.txt",                 "group": "microsoft" },
+    { "target": "captive.apple.com:80",             "path": "/hotspot-detect.html",      "group": "apple" },
+    { "target": "cp.cloudflare.com:80",             "path": "/generate_204",             "group": "cloudflare" },
+    { "target": "connectivity-check.ubuntu.com:80", "path": "/",                         "group": "ubuntu" },
+    { "target": "network-test.debian.org:80",       "path": "/nm",                       "group": "debian" },
+    { "target": "nmcheck.gnome.org:80",             "path": "/check_network_status.txt", "group": "gnome" }
+  ],
   "targets": [
-    { "package": "isp",              "proxy_url": "${ISP_PROXY_URL}",     "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "datacenter",       "proxy_url": "${DC_PROXY_URL}",      "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 },
-    { "package": "ipv6-residential", "proxy_url": "${IPV6_PROXY_URL}",    "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "ipv6-datacenter",  "proxy_url": "${IPV6_DC_PROXY_URL}", "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect", "ip_version": 6, "interval_ms": 20000 },
-    { "package": "isp_eu",           "proxy_url": "${ISP_EU_PROXY_URL}",  "connect_target": "${ORIGIN_HOST}:8080", "origin_get": "/connect", "ip_version": 4, "interval_ms": 20000 }
+    {
+      "package": "isp", "proxy_url": "${ISP_PROXY_URL}", "ip_version": 4, "interval_ms": 20000,
+      "connect_targets": [
+        { "target": "${ORIGIN_HOST}:8080",              "path": "/connect",                  "group": "origin" },
+        { "target": "detectportal.firefox.com:80",      "path": "/success.txt",              "group": "mozilla" },
+        { "target": "connectivitycheck.gstatic.com:80", "path": "/generate_204",             "group": "google" },
+        { "target": "clients3.google.com:80",           "path": "/generate_204",             "group": "google" },
+        { "target": "www.msftconnecttest.com:80",       "path": "/connecttest.txt",          "group": "microsoft" },
+        { "target": "www.msftncsi.com:80",              "path": "/ncsi.txt",                 "group": "microsoft" },
+        { "target": "captive.apple.com:80",             "path": "/hotspot-detect.html",      "group": "apple" },
+        { "target": "cp.cloudflare.com:80",             "path": "/generate_204",             "group": "cloudflare" },
+        { "target": "connectivity-check.ubuntu.com:80", "path": "/",                         "group": "ubuntu" },
+        { "target": "network-test.debian.org:80",       "path": "/nm",                       "group": "debian" },
+        { "target": "nmcheck.gnome.org:80",             "path": "/check_network_status.txt", "group": "gnome" }
+      ]
+    },
+    { "package": "datacenter",       "proxy_url": "${DC_PROXY_URL}",      "ip_version": 4, "interval_ms": 20000, "connect_target": "${ORIGIN_HOST}:8080",   "origin_get": "/connect" },
+    { "package": "ipv6-residential", "proxy_url": "${IPV6_PROXY_URL}",    "ip_version": 6, "interval_ms": 20000, "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect" },
+    { "package": "ipv6-datacenter",  "proxy_url": "${IPV6_DC_PROXY_URL}", "ip_version": 6, "interval_ms": 20000, "connect_target": "[${ORIGIN_IPV6}]:8080", "origin_get": "/connect" },
+    { "package": "isp_eu",           "proxy_url": "${ISP_EU_PROXY_URL}",  "ip_version": 4, "interval_ms": 20000, "connect_target": "${ORIGIN_HOST}:8080",   "origin_get": "/connect" }
   ]
 }

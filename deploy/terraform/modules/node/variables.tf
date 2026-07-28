@@ -61,12 +61,25 @@ variable "package_targets" {
 # connectivity-check endpoints (tiny, fast, near every region, dual-stack via hostname
 # so they work for v4 and v6-egress packages). Our own origin stays in the set as the
 # availability floor — there is no hard external dependency.
+# Provider-DIVERSE pool: the worker stratifies by `group` and probes one endpoint
+# from each of GroupsPerCycle groups per cycle (plus the origin), so no single
+# provider blocking proxy egress can take the package Down — a cycle always spans
+# multiple independent networks. All are HTTP/80 connectivity-check endpoints with
+# a fetchable body or 204 (both record ttfb; :443 CONNECT-only would zero it and
+# disable the Degraded trigger). Add more groups to harden further.
 variable "connect_probe_extra" {
-  type = list(object({ target = string, path = string }))
+  type = list(object({ target = string, path = string, group = string }))
   default = [
-    { target = "detectportal.firefox.com:80", path = "/success.txt" },
-    { target = "www.gstatic.com:80", path = "/generate_204" },
-    { target = "one.one.one.one:80", path = "/" },
+    { target = "detectportal.firefox.com:80", path = "/success.txt", group = "mozilla" },
+    { target = "connectivitycheck.gstatic.com:80", path = "/generate_204", group = "google" },
+    { target = "clients3.google.com:80", path = "/generate_204", group = "google" },
+    { target = "www.msftconnecttest.com:80", path = "/connecttest.txt", group = "microsoft" },
+    { target = "www.msftncsi.com:80", path = "/ncsi.txt", group = "microsoft" },
+    { target = "captive.apple.com:80", path = "/hotspot-detect.html", group = "apple" },
+    { target = "cp.cloudflare.com:80", path = "/generate_204", group = "cloudflare" },
+    { target = "connectivity-check.ubuntu.com:80", path = "/", group = "ubuntu" },
+    { target = "network-test.debian.org:80", path = "/nm", group = "debian" },
+    { target = "nmcheck.gnome.org:80", path = "/check_network_status.txt", group = "gnome" },
   ]
 }
 variable "go_version" {

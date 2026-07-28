@@ -291,8 +291,15 @@ func runTarget(ctx context.Context, cfg Config, t Target, out chan<- model.Probe
 	// as the no-proxy baseline ("_direct"), so the page can show proxy overhead.
 	eps := t.connectEndpoints()
 	start(defInt(t.IntervalMS, 20000), func() {
-		emit(probe.ConnectBest(proxy, eps, timeout))
-		emit(probe.ConnectBest(nil, eps, timeout))
+		// Through the proxy, then direct (baseline). Each returns the winning
+		// row (scenario 'connect', drives the SLO) plus per-target diagnostic
+		// rows (scenario 'connect_probe', for visibility — see ConnectBest).
+		best, probes := probe.ConnectBest(proxy, eps, timeout)
+		emit(best)
+		emit(probes...)
+		best, probes = probe.ConnectBest(nil, eps, timeout)
+		emit(best)
+		emit(probes...)
 	})
 	start(s.ScrapingIntervalMS, func() {
 		emit(probe.Scraping(proxy, cfg.ScrapeHosts, timeout)...)

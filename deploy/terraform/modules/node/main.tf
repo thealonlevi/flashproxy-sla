@@ -25,7 +25,7 @@ locals {
     # anycast endpoints; the worker probes all and records the BEST (lowest ttfb; Down
     # only if every one fails), so target-side noise can't look like a proxy fault.
     connect_targets = concat(
-      [{ target = lookup(var.package_targets, pkg, contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__"), path = "/connect" }],
+      [{ target = lookup(var.package_targets, pkg, contains(local.ipv6_pkgs, pkg) ? "__ORIGIN6__" : "__ORIGIN__"), path = "/connect", group = "origin" }],
       var.connect_probe_extra,
     )
     ip_version  = contains(local.ipv6_pkgs, pkg) ? 6 : 4

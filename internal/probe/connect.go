@@ -6,8 +6,8 @@ package probe
 
 import (
 	"math"
+	"math/rand"
 	"net"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -24,22 +24,71 @@ import (
 type Endpoint struct {
 	Target string `json:"target"`
 	Path   string `json:"path"`
+	// Group is the provider family (e.g. "google", "mozilla", "cloudflare").
+	// Stratified sampling probes one endpoint from each of several groups per
+	// cycle, so the pool stays provider-diverse without probing all N every
+	// cycle. Group "origin" (or empty) is ALWAYS probed — it is our own
+	// availability floor and guarantees a cycle can never draw an all-blocked
+	// sample of third parties.
+	Group string `json:"group"`
 }
 
-// ConnectBest runs the connect scenario against EVERY endpoint concurrently and
-// returns the single BEST result for the cycle: among endpoints that succeeded, the
-// lowest ttfb (response time) wins; the package counts as reachable if ANY endpoint
-// succeeded, and Down only if EVERY one failed. Probing a variety of targets and
-// keeping the best makes the SLA signal robust to target-side noise — a slow or flaky
-// destination can't masquerade as a proxy problem. The returned row carries the
-// winning target, so downstream (rollup/ledger/incidents) is unchanged.
-func ConnectBest(proxy *url.URL, eps []Endpoint, timeout time.Duration) model.ProbeResult {
-	if len(eps) == 0 {
-		return model.ProbeResult{Scenario: scn("connect", proxy), Proto: "http", TS: time.Now().UTC(), ErrorType: "no_targets"}
+// GroupsPerCycle is how many non-origin provider groups are sampled each cycle
+// (one endpoint from each). Bounds third-party load and keeps the sample
+// provider-diverse. Origin endpoints are always probed on top of this.
+const GroupsPerCycle = 5
+
+// stratifiedSample selects the endpoints to probe this cycle: every "origin"
+// (or ungrouped) endpoint, plus one randomly-chosen endpoint from each of up to
+// groupsPerCycle other provider groups (the groups themselves chosen at random).
+// So per-cycle third-party load is bounded and diverse, and the origin floor is
+// always present. Pure and deterministic given the RNG the global rand provides.
+func stratifiedSample(eps []Endpoint, groupsPerCycle int) []Endpoint {
+	if groupsPerCycle <= 0 {
+		groupsPerCycle = GroupsPerCycle
 	}
-	results := make([]model.ProbeResult, len(eps))
+	var always []Endpoint
+	groups := map[string][]Endpoint{}
+	var order []string // group names in first-seen order (stable input to the shuffle)
+	for _, e := range eps {
+		if e.Group == "" || e.Group == "origin" {
+			always = append(always, e)
+			continue
+		}
+		if _, ok := groups[e.Group]; !ok {
+			order = append(order, e.Group)
+		}
+		groups[e.Group] = append(groups[e.Group], e)
+	}
+	rand.Shuffle(len(order), func(i, j int) { order[i], order[j] = order[j], order[i] })
+	if len(order) > groupsPerCycle {
+		order = order[:groupsPerCycle]
+	}
+	out := append([]Endpoint(nil), always...)
+	for _, g := range order {
+		m := groups[g]
+		out = append(out, m[rand.Intn(len(m))])
+	}
+	return out
+}
+
+// ConnectBest probes a stratified sample of the endpoint pool concurrently and
+// returns (1) the single BEST result — among endpoints that succeeded, the
+// lowest ttfb wins; reachable if ANY succeeded, Down only if every sampled
+// endpoint failed — which drives the SLO verdict, and (2) the per-target
+// results relabeled to the "connect_probe" scenario, so a target going bad
+// (e.g. a provider blocking proxy egress) is visible even though only the winner
+// counts. The best row carries the winning target; downstream (rollup / ledger /
+// incidents) is unchanged.
+func ConnectBest(proxy *url.URL, eps []Endpoint, timeout time.Duration) (best model.ProbeResult, probes []model.ProbeResult) {
+	if len(eps) == 0 {
+		return model.ProbeResult{Scenario: scn("connect", proxy), Proto: "http", TS: time.Now().UTC(), ErrorType: "no_targets"}, nil
+	}
+	sample := stratifiedSample(eps, GroupsPerCycle)
+
+	results := make([]model.ProbeResult, len(sample))
 	var wg sync.WaitGroup
-	for i, ep := range eps {
+	for i, ep := range sample {
 		wg.Add(1)
 		go func(i int, ep Endpoint) {
 			defer wg.Done()
@@ -47,11 +96,22 @@ func ConnectBest(proxy *url.URL, eps []Endpoint, timeout time.Duration) model.Pr
 		}(i, ep)
 	}
 	wg.Wait()
-	best := results[0]
+
+	best = results[0]
 	for _, r := range results[1:] {
 		best = betterConnect(best, r)
 	}
-	return best
+
+	// Per-target diagnostic rows under a separate scenario. The SLO reads only
+	// scenario='connect', so these change no verdict — they make per-target
+	// health (which ConnectBest otherwise hides behind the winner) visible.
+	probeScn := scn("connect_probe", proxy)
+	probes = make([]model.ProbeResult, len(results))
+	for i, r := range results {
+		r.Scenario = probeScn
+		probes[i] = r
+	}
+	return best, probes
 }
 
 // betterConnect prefers a success over a failure; between two successes the lower
@@ -96,7 +156,10 @@ func ConnectScenario(proxy *url.URL, target, originGet string, timeout time.Dura
 			r.TotalMS = ms(time.Since(start))
 			return r
 		}
-		if status != http.StatusOK {
+		// Accept any 2xx. Connectivity-check endpoints answer 200 (with a tiny
+		// body) or 204 (No Content) — both are "reachable", and both record ttfb
+		// at the headers, so the latency metric stays meaningful.
+		if status < 200 || status >= 300 {
 			r.ErrorType = "origin_status_" + strconv.Itoa(status)
 			r.TotalMS = ms(time.Since(start))
 			return r
